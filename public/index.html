@@ -7,12 +7,15 @@
   <meta name="description" content="Sing karaoke together online. Go solo, join a public room, or open a private room for up to 10 friends and record the whole song.">
   <meta name="theme-color" content="#0D111B">
   <meta name="color-scheme" content="dark">
+  <!-- Only our scripts, the pinned Socket.IO build and YouTube's player may run. Keep in step with CSP in server.js. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://www.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://i.ytimg.com https://*.ytimg.com; media-src 'self' blob:; connect-src 'self' https: wss:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23080A11' stroke='%23E3A857' stroke-opacity='.5'/%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%23F2E8D5' stroke-opacity='.18'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23E3A857'/%3E%3Ccircle cx='16' cy='16' r='1.5' fill='%23080A11'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..600,0..100,0..1;1,9..144,300..600,0..100,0..1&family=Instrument+Sans:wght@400..600&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
   <!-- Bump ?v= when styles or scripts change, so browsers can't use an old cached copy. -->
-  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -39,8 +42,9 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <!-- Relative paths: the site also runs from https://<user>.github.io/<repo>/ -->
-  <script src="config.js?v=8"></script>
-  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js" crossorigin="anonymous"></script>
-  <script type="module" src="app.js?v=8"></script>
+  <script src="config.js?v=9"></script>
+  <!-- integrity = fingerprint of this exact file; the browser refuses it if the CDN copy is ever altered -->
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js" integrity="sha384-mkQ3/7FUtcGyoppY6bz/PORYoGqOl7/aSUMn2ymDOJcapfS6PHqxhRTMh1RR0Q6+" crossorigin="anonymous"></script>
+  <script type="module" src="app.js?v=9"></script>
 </body>
 </html>

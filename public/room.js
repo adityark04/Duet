@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=8';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=9';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -1155,6 +1155,8 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
 
     S.socket.on('connect_error', (err) => {
       if (err.message === 'unauthorized') { toast('Please sign in again.'); location.hash = '#/login'; }
+      else if (err.message === 'rate-limited') toast('Too many reconnects. Waiting a moment before trying again.', 5000);
+      else if (err.message === 'too-many-connections') toast('Too many Duet tabs open on your network. Close some and reload.', 6000);
     });
     S.socket.on('connect', async () => {
       for (const sid of [...S.peers.keys()]) closePeer(sid);
@@ -1214,6 +1216,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     S.socket.on('react', ({ emoji, username }) => floatReaction(emoji, username));
     S.socket.on('chat', addChat);
     S.socket.on('chat-error', ({ error }) => toast(error));
+    S.socket.on('slow-down', () => toast('Easy there. Some of your clicks were ignored.'));
   }
 
   // share buttons

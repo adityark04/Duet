@@ -70,6 +70,28 @@ Settings come from environment variables; see [.env.example](.env.example). `npm
 | `FORCE_HTTPS`, `TRUST_PROXY` | HTTPS redirect, and how many proxies sit in front of the app. |
 | `FFMPEG_PATH`, `EXPORT_MAX_MB`, `EXPORT_MAX_JOBS` | MP4 converter: binary (defaults to the bundled `ffmpeg-static`), upload size limit (600 MB), conversions at once (2). |
 
+### Abuse protection
+
+Built-in limits keep one person (or a script) from guessing passwords or private room codes, or from overloading the server. Defaults suit a small free server; change them with environment variables.
+
+| Variable | Default | Limits |
+| --- | --- | --- |
+| `RATE_API_PER_MIN` | 300 | API calls per minute, per IP |
+| `RATE_SIGNUP_PER_HOUR` | 5 | New accounts per hour, per IP |
+| `RATE_LOGIN_PER_15MIN` | 20 | Sign-in attempts per 15 min, per IP (and 10 per username) |
+| `RATE_ROOMS_PER_HOUR` | 10 | Rooms created per hour, per person |
+| `RATE_CODE_LOOKUPS_PER_10MIN` | 30 | Room-code lookups and joins per 10 min, per person |
+| `RATE_EXPORTS_PER_HOUR` | 10 | Recording conversions per hour, per person (one at a time) |
+| `RATE_CONNECTS_PER_MIN` | 30 | Live connections opened per minute, per IP |
+| `MAX_CONNECTIONS_PER_IP` | 20 | Live connections open at once, per IP |
+| `MAX_ACCOUNTS` / `MAX_ROOMS` / `MAX_ROOMS_PER_USER` | 10000 / 300 / 3 | Totals |
+| `MAX_PASSWORD_CHECKS` / `MAX_PASSWORD_QUEUE` | 2 / 30 | Password checks at once / waiting (then "busy") |
+| `EXPORT_MAX_MB` | 250 | Largest recording upload |
+
+Live events (chat, reactions, playback controls, call set-up) each have a per-person budget; floods are dropped and a connection that keeps flooding is closed.
+
+Rate limits are per IP, so the server must see each visitor's real address. Open `/api/whoami` on your server: `ip` should be your own public IP. If it shows a proxy's address instead, set `CLIENT_IP_HEADER` (for example `cf-connecting-ip`) or adjust `TRUST_PROXY`.
+
 `GET /healthz` reports `turn: off | secret | static | misconfigured`, so you can check TURN is set up.
 
 ### Why TURN

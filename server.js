@@ -21,6 +21,82 @@ const FORCE_HTTPS = /^(1|true|yes)$/i.test(process.env.FORCE_HTTPS || '');
 // How many reverse proxies sit in front of the app (Caddy, Render, Fly…). 0 = none.
 const TRUST_PROXY = Number(process.env.TRUST_PROXY ?? 1);
 
+// ---------- abuse protection ----------
+// Everything here is in memory (one server process). Numbers can be tuned with env vars.
+const envInt = (name, def) => { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? Math.floor(n) : def; };
+const CAPS = {
+  accounts: envInt('MAX_ACCOUNTS', 10000),      // total sign-ups the server accepts
+  rooms: envInt('MAX_ROOMS', 300),              // rooms open at once
+  roomsPerUser: envInt('MAX_ROOMS_PER_USER', 3),// rooms one person can have open
+  connPerIp: envInt('MAX_CONNECTIONS_PER_IP', 20),
+  hashConcurrency: envInt('MAX_PASSWORD_CHECKS', 2), // bcrypt is CPU heavy; small free servers choke fast
+  hashQueue: envInt('MAX_PASSWORD_QUEUE', 30),
+};
+
+// Fixed-window counter: at most `max` hits per `windowMs` per key.
+class Limiter {
+  constructor(max, windowMs) { this.max = max; this.windowMs = windowMs; this.hits = new Map(); }
+  hit(key) {
+    const now = Date.now();
+    let e = this.hits.get(key);
+    if (!e || now >= e.reset) { e = { n: 0, reset: now + this.windowMs }; this.hits.set(key, e); }
+    e.n++;
+    return { ok: e.n <= this.max, retryAfter: Math.ceil((e.reset - now) / 1000) };
+  }
+  sweep() { const now = Date.now(); for (const [k, e] of this.hits) if (now >= e.reset) this.hits.delete(k); }
+}
+const MIN = 60_000;
+const LIMIT = {
+  api: new Limiter(envInt('RATE_API_PER_MIN', 300), MIN),            // per IP, every /api call
+  signup: new Limiter(envInt('RATE_SIGNUP_PER_HOUR', 5), 60 * MIN),  // per IP
+  loginIp: new Limiter(envInt('RATE_LOGIN_PER_15MIN', 20), 15 * MIN),// per IP
+  loginName: new Limiter(10, 15 * MIN),                               // per username (slows password guessing)
+  roomCreate: new Limiter(envInt('RATE_ROOMS_PER_HOUR', 10), 60 * MIN), // per user
+  codeGuess: new Limiter(envInt('RATE_CODE_LOOKUPS_PER_10MIN', 30), 10 * MIN), // per user: room lookups + joins
+  export: new Limiter(envInt('RATE_EXPORTS_PER_HOUR', 10), 60 * MIN), // per user
+  connect: new Limiter(envInt('RATE_CONNECTS_PER_MIN', 30), MIN),    // per IP, socket connections
+};
+setInterval(() => Object.values(LIMIT).forEach((l) => l.sweep()), 5 * MIN).unref();
+
+// The client's IP. Behind proxies, X-Forwarded-For is "client, proxy1, proxy2…" and only the
+// entries added by our own proxies can be trusted, so count TRUST_PROXY hops from the right.
+// CLIENT_IP_HEADER (e.g. "cf-connecting-ip") lets a platform header that clients can't forge win.
+const CLIENT_IP_HEADER = (process.env.CLIENT_IP_HEADER || '').toLowerCase();
+function ipFrom(headers, remote) {
+  if (CLIENT_IP_HEADER && headers[CLIENT_IP_HEADER]) return String(headers[CLIENT_IP_HEADER]).split(',')[0].trim();
+  if (TRUST_PROXY > 0 && headers['x-forwarded-for']) {
+    const chain = String(headers['x-forwarded-for']).split(',').map((s) => s.trim()).filter(Boolean);
+    const i = chain.length - TRUST_PROXY;
+    return chain[Math.max(0, i)] || remote || 'unknown';
+  }
+  return remote || 'unknown';
+}
+const reqIp = (req) => ipFrom(req.headers, req.socket.remoteAddress);
+
+function tooMany(res, retryAfter, what = 'Too many attempts') {
+  const mins = Math.max(1, Math.ceil(retryAfter / 60));
+  res.set('Retry-After', String(retryAfter));
+  return res.status(429).json({ error: `${what}. Try again in ${mins} minute${mins === 1 ? '' : 's'}.` });
+}
+// Express middleware: limit by a key derived from the request.
+const rateLimit = (limiter, keyOf, what) => (req, res, next) => {
+  const r = limiter.hit(keyOf(req));
+  return r.ok ? next() : tooMany(res, r.retryAfter, what);
+};
+
+// Password hashing gate: a few at a time, a short queue, then "busy" instead of melting the CPU.
+let hashing = 0;
+const hashWaiters = [];
+async function withHashSlot(fn) {
+  if (hashing >= CAPS.hashConcurrency) {
+    if (hashWaiters.length >= CAPS.hashQueue) { const e = new Error('busy'); e.busy = true; throw e; }
+    await new Promise((resolve) => hashWaiters.push(resolve));
+  }
+  hashing++;
+  try { return await fn(); }
+  finally { hashing--; hashWaiters.shift()?.(); }
+}
+
 // ---------- ICE / TURN ----------
 // STUN finds a public address; TURN relays audio when two people can't reach
 // each other directly (strict NATs, corporate or mobile networks).
@@ -55,7 +131,8 @@ function iceServersFor(userId) {
 // ---------- ffmpeg (turns browser WebM recordings into seekable MP4) ----------
 let FFMPEG = process.env.FFMPEG_PATH || '';
 if (!FFMPEG) { try { FFMPEG = require('ffmpeg-static'); } catch { FFMPEG = 'ffmpeg'; } }
-const EXPORT_MAX_BYTES = (Number(process.env.EXPORT_MAX_MB) || 600) * 1024 * 1024;
+// A 5-minute take is ~100 MB; 250 MB leaves room without letting one upload fill a small server's disk.
+const EXPORT_MAX_BYTES = (Number(process.env.EXPORT_MAX_MB) || 250) * 1024 * 1024;
 const EXPORT_MAX_JOBS = Number(process.env.EXPORT_MAX_JOBS) || 2;
 let exportJobs = 0;
 
@@ -182,12 +259,33 @@ if (FORCE_HTTPS) {
     res.redirect(308, `https://${req.get('host')}${req.originalUrl}`);
   });
 }
+// Content Security Policy: only our own scripts, the Socket.IO CDN build and YouTube's player.
+// Kept in step with the <meta> CSP in public/index.html (used on GitHub Pages).
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' https://cdn.jsdelivr.net https://www.youtube.com https://s.ytimg.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https://i.ytimg.com https://*.ytimg.com",
+  "media-src 'self' blob:",
+  "connect-src 'self' https: wss:",
+  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
 app.use((req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     // Mic for singing, camera for video chat, display capture for recording.
     'Permissions-Policy': 'microphone=(self), camera=(self), display-capture=(self), geolocation=()',
+    'Content-Security-Policy': CSP,
+    'X-Frame-Options': 'DENY',
+    'Cross-Origin-Resource-Policy': 'cross-origin',
   });
   if (req.secure) res.set('Strict-Transport-Security', 'max-age=15552000');
   next();
@@ -208,6 +306,14 @@ app.use('/api', (req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(origin && CORS_ORIGINS.includes(origin) ? 204 : 403);
   next();
 });
+// After CORS, so a 429 still carries CORS headers and the page can show the message.
+app.use('/api', rateLimit(LIMIT.api, reqIp, 'Too many requests'));
+
+// What the server sees as your address (to check rate limiting works behind the host's proxies).
+app.get('/api/whoami', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ ip: reqIp(req), via: CLIENT_IP_HEADER || (TRUST_PROXY > 0 ? `x-forwarded-for, ${TRUST_PROXY} hop(s)` : 'socket') });
+});
 
 app.use(express.json({ limit: '20kb' }));
 // max-age 0 + ETag: browsers revalidate on each load, so new deploys show up immediately.
@@ -222,21 +328,35 @@ function auth(req, res, next) {
 }
 
 const USERNAME_RE = /^[A-Za-z0-9_.-]{3,20}$/;
+const PASSWORD_MAX = 128;
+const BUSY = 'The server is busy right now. Try again in a few seconds.';
+// Compared against when the name doesn't exist, so a wrong name takes as long as a wrong password
+// (otherwise response time reveals which usernames exist).
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
 
-app.post('/api/signup', async (req, res) => {
+app.post('/api/signup', rateLimit(LIMIT.signup, reqIp, 'Too many new accounts from your network'), async (req, res) => {
   const { username, password } = req.body || {};
   const errors = {};
   if (!USERNAME_RE.test(username || '')) errors.username = 'Use 3–20 letters, numbers, dots, dashes or underscores.';
   if (typeof password !== 'string' || password.length < 6) errors.password = 'Use at least 6 characters.';
+  else if (password.length > PASSWORD_MAX) errors.password = `Use at most ${PASSWORD_MAX} characters.`;
   if (!errors.username && users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
     errors.username = 'That name is taken. Try another.';
   }
   if (Object.keys(errors).length) return res.status(400).json({ errors });
+  if (users.length >= CAPS.accounts) return res.status(503).json({ error: 'Sign-ups are closed for now. Try again later.' });
 
+  let passHash;
+  try { passHash = await withHashSlot(() => bcrypt.hash(password, 10)); }
+  catch (err) { if (err.busy) return res.status(503).json({ error: BUSY }); throw err; }
+  // Re-check: another request may have taken the name while we were hashing.
+  if (users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
+    return res.status(400).json({ errors: { username: 'That name is taken. Try another.' } });
+  }
   const user = {
     id: newUserId(),
     username,
-    passHash: await bcrypt.hash(password, 10),
+    passHash,
     createdAt: new Date().toISOString(),
   };
   users.push(user);
@@ -249,12 +369,17 @@ app.post('/api/signup', async (req, res) => {
   res.json({ token: signToken(user.id), user: publicUser(user) });
 });
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', rateLimit(LIMIT.loginIp, reqIp, 'Too many sign-in attempts'), async (req, res) => {
   const { username, password } = req.body || {};
-  const user = users.find((u) => u.username.toLowerCase() === String(username || '').toLowerCase());
-  if (!user || !(await bcrypt.compare(String(password || ''), user.passHash))) {
-    return res.status(401).json({ error: 'That name and password don’t match.' });
-  }
+  const name = String(username || '').toLowerCase().slice(0, 40);
+  const pw = String(password || '').slice(0, PASSWORD_MAX);
+  const perName = LIMIT.loginName.hit(name);
+  if (!perName.ok) return tooMany(res, perName.retryAfter, 'Too many sign-in attempts for this name');
+  const user = users.find((u) => u.username.toLowerCase() === name);
+  let ok;
+  try { ok = await withHashSlot(() => bcrypt.compare(pw, user ? user.passHash : DUMMY_HASH)); }
+  catch (err) { if (err.busy) return res.status(503).json({ error: BUSY }); throw err; }
+  if (!user || !ok) return res.status(401).json({ error: 'That name and password don’t match.' });
   res.json({ token: signToken(user.id), user: publicUser(user) });
 });
 
@@ -273,7 +398,9 @@ app.get('/api/rooms/public', auth, (req, res) => {
   res.json({ rooms: list });
 });
 
-app.post('/api/rooms', auth, (req, res) => {
+const byUser = (req) => req.user.id;
+
+app.post('/api/rooms', auth, rateLimit(LIMIT.roomCreate, byUser, 'You’ve opened a lot of rooms'), (req, res) => {
   const { type, capacity, name } = req.body || {};
   if (type !== 'public' && type !== 'private') return res.status(400).json({ error: 'Pick public or private.' });
   let cap = PUBLIC_CAPACITY;
@@ -281,7 +408,11 @@ app.post('/api/rooms', auth, (req, res) => {
     cap = Number(capacity);
     if (!Number.isInteger(cap) || cap < 5 || cap > 10) return res.status(400).json({ error: 'Private rooms hold 5 to 10 people.' });
   }
-  const cleanName = String(name || '').trim().slice(0, 40) || `${req.user.username}’s room`;
+  if (rooms.size >= CAPS.rooms) return res.status(503).json({ error: 'All the rooms are full right now. Try again in a little while.' });
+  const mine = [...rooms.values()].filter((r) => r.hostId === req.user.id).length;
+  if (mine >= CAPS.roomsPerUser) return res.status(429).json({ error: `You already have ${mine} rooms open. Use one of those, or wait for an empty one to close.` });
+  // Strip control characters and the like; the client also escapes everything it shows.
+  const cleanName = String(name || '').replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮]/g, '').trim().slice(0, 40) || `${req.user.username}’s room`;
   const code = newRoomCode();
   const room = {
     code,
@@ -315,8 +446,13 @@ function exportArgs(kind, inPath, outPath, { copyVideo, copyAudio }) {
   return [...head, '-map', '0:v:0?', '-map', '0:a:0?', ...video, ...audio, '-movflags', '+faststart', outPath];
 }
 
-app.post('/api/export', auth, (req, res) => {
+const exportingUsers = new Set();
+app.post('/api/export', auth, rateLimit(LIMIT.export, byUser, 'You’ve converted a lot of recordings'), (req, res) => {
   if (exportJobs >= EXPORT_MAX_JOBS) return res.status(503).json({ error: 'The converter is busy. Try again in a minute.' });
+  // One conversion per person at a time.
+  if (exportingUsers.has(req.user.id)) return res.status(429).json({ error: 'Your last recording is still converting. Wait for it to finish.' });
+  exportingUsers.add(req.user.id);
+  res.on('close', () => exportingUsers.delete(req.user.id));
   const kind = req.query.kind === 'audio' ? 'audio' : 'video';
   const fast = { copyVideo: req.query.vcodec === 'h264', copyAudio: req.query.acodec === 'aac' };
   const declared = Number(req.get('content-length') || 0);
@@ -375,8 +511,9 @@ app.post('/api/export', auth, (req, res) => {
   });
 });
 
-app.get('/api/rooms/:code', auth, (req, res) => {
-  const r = rooms.get(String(req.params.code).toUpperCase());
+// Rate limited per person so nobody can sweep through codes to find private rooms.
+app.get('/api/rooms/:code', auth, rateLimit(LIMIT.codeGuess, byUser, 'Too many room codes tried'), (req, res) => {
+  const r = rooms.get(String(req.params.code).toUpperCase().slice(0, 5));
   if (!r) return res.status(404).json({ error: 'No room with that code. Check it and try again.' });
   res.json({ room: roomSummary(r) });
 });
@@ -391,22 +528,80 @@ const io = new Server(server, {
   ...(CORS_ORIGINS.length ? { cors: { origin: CORS_ORIGINS, methods: ['GET', 'POST'] } } : {}),
 });
 
+// Open connections per IP (a household or office shares one IP, so the cap is generous).
+const connsByIp = new Map();
+
 io.use((socket, next) => {
+  const ip = ipFrom(socket.handshake.headers, socket.handshake.address);
+  if (!LIMIT.connect.hit(ip).ok) return next(new Error('rate-limited'));
+  if ((connsByIp.get(ip) || 0) >= CAPS.connPerIp) return next(new Error('too-many-connections'));
   const user = verifyToken(socket.handshake.auth && socket.handshake.auth.token);
   if (!user) return next(new Error('unauthorized'));
   socket.data.user = user;
+  socket.data.ip = ip;
+  connsByIp.set(ip, (connsByIp.get(ip) || 0) + 1);
+  socket.on('disconnect', () => {
+    const n = (connsByIp.get(ip) || 1) - 1;
+    if (n > 0) connsByIp.set(ip, n); else connsByIp.delete(ip);
+  });
   next();
 });
+
+// Token bucket: `rate` events per second on average, bursts up to `burst`.
+function bucket(rate, burst) {
+  let tokens = burst;
+  let last = Date.now();
+  return () => {
+    const now = Date.now();
+    tokens = Math.min(burst, tokens + ((now - last) / 1000) * rate);
+    last = now;
+    if (tokens < 1) return false;
+    tokens -= 1;
+    return true;
+  };
+}
+// Per-event budgets. Signalling bursts while a call connects (ICE candidates), so it gets the most.
+const EVENT_BUDGET = {
+  signal: [30, 150],
+  'media:control': [2, 6],
+  'media:load': [0.2, 3],
+  'media:title': [0.5, 3],
+  state: [2, 8],
+  react: [2, 6],
+  rec: [0.5, 4],
+  chat: [1.5, 6],
+  join: [0.2, 3],
+  time: [2, 10],
+  leave: [1, 3],
+};
 
 io.on('connection', (socket) => {
   const user = socket.data.user;
   let room = null;
 
+  // Drop events over budget; disconnect a socket that keeps flooding.
+  const buckets = {};
+  const overall = bucket(40, 200);
+  let dropped = 0;
+  let droppedSince = Date.now();
+  socket.use(([event], next) => {
+    const spec = EVENT_BUDGET[event];
+    if (!spec) return; // unknown event: ignore silently
+    buckets[event] ||= bucket(...spec);
+    if (overall() && buckets[event]()) return next();
+    if (Date.now() - droppedSince > 10_000) { dropped = 0; droppedSince = Date.now(); }
+    if (++dropped === 1) socket.emit('slow-down');
+    if (dropped > 300) socket.disconnect(true);
+  });
+
   socket.on('time', (cb) => typeof cb === 'function' && cb(Date.now()));
 
   socket.on('join', ({ code } = {}, cb) => {
     if (typeof cb !== 'function') return;
-    const r = rooms.get(String(code || '').toUpperCase());
+    // Same per-person budget as code lookups, so joins can't be used to guess private codes either.
+    const guess = LIMIT.codeGuess.hit(user.id);
+    if (!guess.ok) return cb({ error: `Too many room codes tried. Try again in ${Math.ceil(guess.retryAfter / 60)} minutes.` });
+    const r = rooms.get(String(code || '').toUpperCase().slice(0, 5));
     if (!r) return cb({ error: 'No room with that code. Check it and try again.' });
     if (room) return cb({ error: 'You’re already in a room.' });
     // Same account in a second tab: drop the old connection from the room.
@@ -460,7 +655,8 @@ io.on('connection', (socket) => {
 
   // WebRTC signalling relay — only between members of the same room.
   socket.on('signal', ({ to, data } = {}) => {
-    if (!room || !room.members.has(to)) return;
+    if (!room || typeof to !== 'string' || to === socket.id || !room.members.has(to)) return;
+    if (!data || typeof data !== 'object') return;
     io.to(to).emit('signal', { from: socket.id, data });
   });
 
@@ -472,12 +668,12 @@ io.on('connection', (socket) => {
 
   socket.on('media:title', ({ videoId, title } = {}) => {
     if (!room || room.media.videoId !== videoId) return;
-    room.media.title = String(title || '').slice(0, 120) || null;
+    room.media.title = String(title || '').replace(/[\u0000-\u001f\u007f-\u009f‪-‮]/g, '').slice(0, 120) || null;
   });
 
   socket.on('media:control', ({ action, position } = {}) => {
     if (!room || !room.media.videoId) return;
-    const pos = Math.max(0, Number(position) || 0);
+    const pos = Math.min(24 * 3600, Math.max(0, Number(position) || 0));
     if (action === 'play') room.media = { ...room.media, playing: true, position: pos, at: Date.now() };
     else if (action === 'pause') room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
     else if (action === 'seek') room.media = { ...room.media, position: pos, at: Date.now() };
