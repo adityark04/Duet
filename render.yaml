@@ -1,0 +1,36 @@
+# Render blueprint for the Duet server (https://render.com > New > Blueprint > pick this repo).
+# Free plan: the server sleeps after ~15 min idle (first visit then takes ~1 min to wake) and
+# its disk is wiped, so accounts are kept in a free Upstash Redis database instead.
+# Fill the "sync: false" values in the Render dashboard when it asks.
+services:
+  - type: web
+    name: duet-karaoke
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: TRUST_PROXY
+        value: "1"
+      - key: FORCE_HTTPS
+        value: "true"
+      # Your GitHub Pages address, e.g. https://yourname.github.io (no path, no trailing slash)
+      - key: CORS_ORIGINS
+        sync: false
+      # From https://console.upstash.com > your Redis database > REST API
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      # Optional: hosted TURN relay for friends on strict networks
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false

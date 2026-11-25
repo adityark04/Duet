@@ -1,0 +1,52 @@
+# Publishes the front end (public/) to GitHub Pages on every push to main.
+# One-time setup in the repo on github.com:
+#   1. Settings > Pages > Build and deployment > Source: GitHub Actions
+#   2. Settings > Secrets and variables > Actions > Variables > New repository variable
+#        DUET_API_URL = https://<your-server>.onrender.com   (the hosted server.js)
+name: Deploy front end to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['public/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build site and point it at the server
+        env:
+          DUET_API_URL: ${{ vars.DUET_API_URL }}
+        run: |
+          mkdir -p site
+          cp -r public/. site/
+          if [ -z "$DUET_API_URL" ]; then
+            echo "::warning::DUET_API_URL repository variable is not set, so the site can't reach a server yet."
+          fi
+          node -e 'const u=(process.env.DUET_API_URL||"").trim().replace(/\/+$/,""); require("fs").writeFileSync("site/config.js", "window.DUET_CONFIG = { apiBase: " + JSON.stringify(u) + " };\n")'
+          cat site/config.js
+          touch site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

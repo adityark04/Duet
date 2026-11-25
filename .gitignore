@@ -1,0 +1,20 @@
+node_modules/
+
+# Accounts and the sign-in key. Never commit.
+data/
+.env
+
+# Recordings made while testing
+*.webm
+*.mp4
+*.m4a
+
+# Local tool settings and downloaded skills
+.claude/
+.agents/
+skills-lock.json
+
+# OS / editor clutter
+.DS_Store
+Thumbs.db
+.vscode/

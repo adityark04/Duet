@@ -1,0 +1,20 @@
+{
+  "name": "duet-karaoke",
+  "version": "1.0.0",
+  "description": "Sing karaoke together online: solo, public rooms, or private rooms with a 5-character code.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --env-file-if-exists=.env --watch server.js"
+  },
+  "engines": {
+    "node": ">=22.9"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "ffmpeg-static": "^5.3.0",
+    "socket.io": "^4.8.1"
+  }
+}
