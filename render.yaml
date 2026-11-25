@@ -7,6 +7,8 @@ services:
     name: duet-karaoke
     runtime: node
     plan: free
+    # Keep the server next to the Upstash database (Singapore, ap-southeast-1).
+    region: singapore
     buildCommand: npm ci --omit=dev
     startCommand: node server.js
     healthCheckPath: /healthz

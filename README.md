@@ -41,7 +41,7 @@ GitHub Pages only serves static files, so Duet runs in two halves:
 | Server | **Render** free web service | `server.js`: sign-in, rooms, chat, voice connections, MP4 conversion. |
 | Accounts | **Upstash** free Redis | Render's free plan wipes its disk, so accounts live here. |
 
-1. **Upstash** (accounts). Sign up at [upstash.com](https://upstash.com), create a Redis database (free), open its **REST API** section and copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+1. **Upstash** (accounts). Sign up at [upstash.com](https://upstash.com), create a Redis database (free plan, region **Singapore / ap-southeast-1** to sit next to the Render server in `render.yaml`), open its **REST API** section and copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
 2. **Render** (server). Sign up at [render.com](https://render.com) with GitHub, then **New > Blueprint**, pick this repo. When asked, fill in:
    - `CORS_ORIGINS` = `https://<you>.github.io` (no repo path, no trailing slash)
    - `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` from step 1
