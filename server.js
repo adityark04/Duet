@@ -310,9 +310,14 @@ app.use('/api', (req, res, next) => {
 app.use('/api', rateLimit(LIMIT.api, reqIp, 'Too many requests'));
 
 // What the server sees as your address (to check rate limiting works behind the host's proxies).
+// Also lists the proxy headers that reached us (they only ever contain the caller's own address).
 app.get('/api/whoami', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ ip: reqIp(req), via: CLIENT_IP_HEADER || (TRUST_PROXY > 0 ? `x-forwarded-for, ${TRUST_PROXY} hop(s)` : 'socket') });
+  const seen = {};
+  for (const h of ['x-forwarded-for', 'cf-connecting-ip', 'true-client-ip', 'x-real-ip', 'x-envoy-external-address']) {
+    if (req.headers[h]) seen[h] = String(req.headers[h]);
+  }
+  res.json({ ip: reqIp(req), via: CLIENT_IP_HEADER || (TRUST_PROXY > 0 ? `x-forwarded-for, ${TRUST_PROXY} hop(s)` : 'socket'), headers: seen });
 });
 
 app.use(express.json({ limit: '20kb' }));
