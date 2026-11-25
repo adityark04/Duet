@@ -2,6 +2,8 @@
 
 Sing karaoke with friends who can't be in the same place.
 
+**Use it:** https://adityark04.github.io/Duet/ (front end on GitHub Pages; the server runs on Render, see *Put it online for free*).
+
 ## Run it
 
 ```
