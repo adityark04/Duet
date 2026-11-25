@@ -11,24 +11,24 @@ on:
     paths: ['public/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# Nothing by default; each job asks for only what it needs.
+permissions: {}
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
+# Two jobs, as in GitHub's own Pages template: the deploy job starts only after the build
+# job has finished uploading, so it never looks for the site package before GitHub has it.
+# Actions are pinned to exact commits (a moved or hijacked tag can't change what runs);
+# Dependabot keeps them up to date, see .github/dependabot.yml.
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    # Actions are pinned to exact commits (a moved or hijacked tag can't change what runs).
-    # Dependabot keeps these up to date; see .github/dependabot.yml.
+    permissions:
+      contents: read
+      pages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,5 +53,17 @@ jobs:
         with:
           path: site
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+      actions: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
