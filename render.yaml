@@ -19,6 +19,9 @@ services:
         generateValue: true
       - key: TRUST_PROXY
         value: "1"
+      # Real visitor IP for rate limits (Render sits behind Cloudflare). Also the default on Render.
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
       - key: FORCE_HTTPS
         value: "true"
       # Your GitHub Pages address, e.g. https://yourname.github.io (no path, no trailing slash)

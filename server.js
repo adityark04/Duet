@@ -61,7 +61,10 @@ setInterval(() => Object.values(LIMIT).forEach((l) => l.sweep()), 5 * MIN).unref
 // The client's IP. Behind proxies, X-Forwarded-For is "client, proxy1, proxy2…" and only the
 // entries added by our own proxies can be trusted, so count TRUST_PROXY hops from the right.
 // CLIENT_IP_HEADER (e.g. "cf-connecting-ip") lets a platform header that clients can't forge win.
-const CLIENT_IP_HEADER = (process.env.CLIENT_IP_HEADER || '').toLowerCase();
+// On Render (which sets RENDER=true) traffic arrives via Cloudflare, then Render's balancer:
+// X-Forwarded-For is "client, cloudflare, render". Cloudflare sets CF-Connecting-IP itself and
+// rejects requests that try to supply it, so it's the reliable source there.
+const CLIENT_IP_HEADER = (process.env.CLIENT_IP_HEADER || (process.env.RENDER ? 'cf-connecting-ip' : '')).toLowerCase();
 function ipFrom(headers, remote) {
   if (CLIENT_IP_HEADER && headers[CLIENT_IP_HEADER]) return String(headers[CLIENT_IP_HEADER]).split(',')[0].trim();
   if (TRUST_PROXY > 0 && headers['x-forwarded-for']) {
