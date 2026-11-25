@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=9';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=11';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -505,7 +505,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     const YT = await loadYouTubeAPI();
     if (S.disposed) return;
     if (S.player) {
-      if (S.loadedId !== videoId) { S.loadedId = videoId; S.player.cueVideoById(videoId); }
+      if (S.loadedId !== videoId) { S.loadedId = videoId; S.ytError = null; S.player.cueVideoById(videoId); }
       return;
     }
     S.loadedId = videoId;
@@ -520,7 +520,18 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         events: {
           onReady: () => { S.playerReady = true; clearTimeout(slow); resolve(); },
           onStateChange: onPlayerState,
-          onError: (e) => toast(e.data === 101 || e.data === 150 ? 'This video can’t be played outside YouTube. Try another upload.' : 'This video couldn’t load. Try another link.'),
+          onError: (e) => {
+            // 101/150: uploader blocks embedding; 100: removed/private; 2/5: bad ID or player error; 153: site address not accepted.
+            S.ytError = e.data;
+            S.blocked = false;
+            const msg = e.data === 101 || e.data === 150
+              ? 'The uploader doesn’t allow this video on other sites. Paste a different upload of the song.'
+              : e.data === 100
+                ? 'This video was removed or is private. Try another link.'
+                : 'YouTube couldn’t play this video here. Try another link.';
+            toast(msg, 7000);
+            els.title.textContent = 'Can’t play: ' + (S.media.title || 'this video');
+          },
         },
       });
     });
@@ -562,6 +573,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       setTimeout(() => {
         if (S.disposed || !S.player || !S.media.playing || S.hold) return;
         const st = S.player.getPlayerState();
+        if (S.ytError) return; // YouTube refused the video: tapping won't help, the error message says why
         if (st !== window.YT.PlayerState.PLAYING && st !== window.YT.PlayerState.BUFFERING) {
           S.blocked = true;
           toast('Tap the video to start playback in sync.');
@@ -861,7 +873,15 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         display = null;
       }
     }
-    if (S.ctx.state === 'suspended') await S.ctx.resume().catch(() => {});
+    // Browsers only start audio after a real click; never wait on that forever.
+    if (S.ctx.state === 'suspended') {
+      await Promise.race([S.ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 1500))]);
+    }
+    if (S.ctx.state !== 'running') {
+      display?.getTracks().forEach((t) => t.stop());
+      toast('Your browser hasn’t switched sound on yet. Click anywhere on the page, then press Record song again.', 6000);
+      return;
+    }
 
     const ctx = S.ctx;
     const dest = ctx.createMediaStreamDestination();

@@ -598,7 +598,10 @@ io.on('connection', (socket) => {
     buckets[event] ||= bucket(...spec);
     if (overall() && buckets[event]()) return next();
     if (Date.now() - droppedSince > 10_000) { dropped = 0; droppedSince = Date.now(); }
-    if (++dropped === 1) socket.emit('slow-down');
+    // Chat gets its own wording, so a dropped message isn't a mystery.
+    if (event === 'chat') socket.emit('chat-error', { error: 'Slow down a little. Some messages weren’t sent.' });
+    else if (++dropped === 1) socket.emit('slow-down');
+    if (event === 'chat') dropped++;
     if (dropped > 300) socket.disconnect(true);
   });
 

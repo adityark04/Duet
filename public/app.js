@@ -1,5 +1,5 @@
 // Keep ?v= in step with index.html and room.js (the same URL = the same module instance).
-import { mountRoom } from './room.js?v=9';
+import { mountRoom } from './room.js?v=11';
 
 // ---------- state ----------
 const store = {
