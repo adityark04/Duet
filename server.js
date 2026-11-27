@@ -265,11 +265,35 @@ function idleLimit(r) {
   if (!r.everJoined) return ROOM_UNUSED_MS;
   return r.type === 'private' ? ROOM_IDLE_PRIVATE_MS : ROOM_IDLE_PUBLIC_MS;
 }
+// Where the song is now (media.at can be slightly in the future: a scheduled start).
+const songPosition = (m) => (m.playing ? Math.max(0, m.position + ((Date.now() - m.at) / 1000) * (m.rate || 1)) : m.position);
 // Pin the song at the point it had reached, so people who come back resume in the right place.
 function freezeMedia(r) {
   if (!r.media.playing) return;
-  const pos = r.media.position + (Date.now() - r.media.at) / 1000;
-  r.media = { ...r.media, playing: false, position: Math.max(0, pos), at: Date.now() };
+  r.media = { ...r.media, playing: false, position: songPosition(r.media), at: Date.now() };
+}
+
+// New songs start for everyone at the same moment, a beat from now, so every player has time
+// to load it first (instead of loading paused and needing someone to press play).
+const START_LEAD_MS = envInt('START_LEAD_MS', 1500);
+const RATES = [0.5, 0.75, 1, 1.25, 1.5];
+
+// ---------- party roles ----------
+// The person who creates a room is its Leader (and an admin). Admins can make others admin,
+// remove people, mute someone's chat, delete messages and set who may add songs, control
+// the music and chat. If no admin is left in the room, the longest-present member becomes one.
+const PERM_VALUES = ['everyone', 'admins'];
+const isAdmin = (r, userId) => r.admins.has(userId);
+const allowed = (r, userId, what) => r.perms[what] === 'everyone' || isAdmin(r, userId);
+const rolesOf = (r) => ({ leaderId: r.hostId, admins: [...r.admins], perms: r.perms, chatMuted: [...r.chatMuted] });
+function ensureAdmin(r) {
+  if (!r.members.size) return;
+  const present = [...r.members.values()];
+  if (present.some((m) => r.admins.has(m.userId))) return;
+  const next = present[0]; // Map keeps join order: the longest-present member
+  r.admins.add(next.userId);
+  io.to(r.code).emit('notice', { text: `${next.username} is now an admin (no admin was left in the room)` });
+  io.to(r.code).emit('roles', rolesOf(r));
 }
 function deleteRoom(r) {
   rooms.delete(r.code);
@@ -288,6 +312,7 @@ function sweepRooms() {
         io.to(r.code).emit('peer-left', { socketId: sid });
       }
     }
+    ensureAdmin(r);
     if (r.members.size === 0) {
       if (!r.emptySince) { r.emptySince = now; freezeMedia(r); }
       if (now - r.emptySince >= idleLimit(r)) deleteRoom(r);
@@ -483,10 +508,14 @@ app.post('/api/rooms', auth, rateLimit(LIMIT.roomCreate, byUser, 'You’ve opene
     hostName: req.user.username,
     createdAt: Date.now(),
     members: new Map(),
-    media: { videoId: null, title: null, playing: false, position: 0, at: Date.now() },
+    media: { videoId: null, title: null, playing: false, position: 0, at: Date.now(), rate: 1 },
     recorders: new Set(),
     chat: [],
     queue: [],
+    admins: new Set([req.user.id]),
+    perms: { queue: 'everyone', playback: 'everyone', chat: 'everyone' },
+    banned: new Set(),
+    chatMuted: new Set(),
     everJoined: false,
     emptySince: Date.now(),
   };
@@ -613,7 +642,7 @@ setInterval(sweepTempFiles, 30 * 60_000).unref();
 function playNext(r, by) {
   const next = r.queue.shift();
   if (!next) return false;
-  r.media = { videoId: next.videoId, title: next.title, playing: true, position: 0, at: Date.now(), by };
+  r.media = { videoId: next.videoId, title: next.title, playing: true, position: 0, at: Date.now() + START_LEAD_MS, rate: 1, by: next.by || by };
   io.to(r.code).emit('media', { ...r.media, event: 'next' });
   io.to(r.code).emit('queue', r.queue);
   return true;
@@ -667,6 +696,12 @@ const EVENT_BUDGET = {
   'queue:add': [0.5, 5],
   'queue:remove': [1, 5],
   'queue:next': [0.3, 3],
+  'admin:role': [1, 5],
+  'admin:mute': [1, 5],
+  'admin:kick': [0.5, 4],
+  'admin:perms': [1, 5],
+  'admin:chat-delete': [2, 8],
+  'admin:chat-clear': [0.2, 2],
 };
 
 io.on('connection', (socket) => {
@@ -705,6 +740,7 @@ io.on('connection', (socket) => {
     const r = rooms.get(String(code || '').toUpperCase().slice(0, 5));
     if (!r) return cb({ error: 'No room with that code. Check it and try again.' });
     if (room) return cb({ error: 'You’re already in a room.' });
+    if (r.banned.has(user.id)) return cb({ error: 'An admin removed you from this room.' });
     // Same account in a second tab: drop the old connection from the room.
     for (const [sid, m] of r.members) {
       if (m.userId === user.id) io.sockets.sockets.get(sid)?.disconnect(true);
@@ -726,8 +762,10 @@ io.on('connection', (socket) => {
       recorders: [...r.recorders],
       chat: r.chat,
       queue: r.queue,
+      roles: rolesOf(r),
       serverNow: Date.now(),
     });
+    ensureAdmin(r);
   });
 
   // Camera / mic on-off, so others can show a video tile or a muted badge.
@@ -744,6 +782,8 @@ io.on('connection', (socket) => {
   const chatTimes = [];
   socket.on('chat', ({ text } = {}) => {
     if (!room || typeof text !== 'string') return;
+    if (!allowed(room, user.id, 'chat')) return socket.emit('chat-error', { error: 'Only admins can chat right now.' });
+    if (room.chatMuted.has(user.id)) return socket.emit('chat-error', { error: 'An admin has muted you in chat.' });
     const clean = cleanText(text, 500);
     if (!clean) return;
     const now = Date.now();
@@ -763,9 +803,13 @@ io.on('connection', (socket) => {
     io.to(to).emit('signal', { from: socket.id, data });
   });
 
+  const deny = (msg) => socket.emit('chat-error', { error: msg });
+
+  // "Play now": the new song starts for everyone together, START_LEAD_MS from now.
   socket.on('media:load', ({ videoId, title } = {}) => {
     if (!room || typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
-    room.media = { videoId, title: cleanText(title, 120) || null, playing: false, position: 0, at: Date.now(), by: user.username };
+    if (!allowed(room, user.id, 'playback')) return deny('Only admins can change the song right now. Add it to Up next instead.');
+    room.media = { videoId, title: cleanText(title, 120) || null, playing: true, position: 0, at: Date.now() + START_LEAD_MS, rate: 1, by: user.username };
     io.to(room.code).emit('media', { ...room.media, event: 'load' });
   });
 
@@ -774,30 +818,40 @@ io.on('connection', (socket) => {
     room.media.title = cleanText(title, 120) || null;
   });
 
-  socket.on('media:control', ({ action, position, videoId } = {}) => {
+  socket.on('media:control', ({ action, position, videoId, rate } = {}) => {
     if (!room || !room.media.videoId) return;
     const pos = Math.min(24 * 3600, Math.max(0, Number(position) || 0));
     if (action === 'ended') {
-      // Everyone's player reports the end; only the first report for the current song counts.
+      // Automatic, from everyone's player: always allowed, but only the first report for the song counts.
       if (videoId && videoId !== room.media.videoId) return;
       if (!room.media.playing) return;
       if (playNext(room, user.username)) return;
       room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
-    } else if (action === 'play') room.media = { ...room.media, playing: true, position: pos, at: Date.now() };
-    else if (action === 'pause') room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
-    else if (action === 'seek') room.media = { ...room.media, position: pos, at: Date.now() };
-    else return;
-    io.to(room.code).emit('media', { ...room.media, event: action, by: user.username });
+    } else {
+      if (!allowed(room, user.id, 'playback')) return deny('Only admins can control the music right now.');
+      if (action === 'play') room.media = { ...room.media, playing: true, position: pos, at: Date.now() };
+      else if (action === 'pause') room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
+      else if (action === 'seek') room.media = { ...room.media, position: pos, at: Date.now() };
+      else if (action === 'rate') {
+        const r = Number(rate);
+        if (!RATES.includes(r)) return;
+        // re-anchor at the current point so the speed change doesn't jump anyone
+        room.media = { ...room.media, position: songPosition(room.media), at: Date.now(), rate: r };
+      } else return;
+    }
+    // `by` stays the person who added the song; `actor` is who just pressed something.
+    io.to(room.code).emit('media', { ...room.media, event: action, actor: user.username });
   });
 
   // ---- Up next ----
   socket.on('queue:add', ({ videoId, title } = {}) => {
     if (!room || typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
-    if (room.queue.length >= QUEUE_MAX) return socket.emit('chat-error', { error: `The list holds ${QUEUE_MAX} songs. Play or remove some first.` });
-    const item = { id: crypto.randomUUID().slice(0, 8), videoId, title: cleanText(title, 120) || null, by: user.username };
-    // Nothing loaded yet: put it straight on (paused, so everyone can get ready).
+    if (!allowed(room, user.id, 'queue')) return deny('Only admins can add songs right now.');
+    if (room.queue.length >= QUEUE_MAX) return deny(`The list holds ${QUEUE_MAX} songs. Play or remove some first.`);
+    const item = { id: crypto.randomUUID().slice(0, 8), videoId, title: cleanText(title, 120) || null, by: user.username, byId: user.id };
+    // Nothing on yet: start it for everyone straight away.
     if (!room.media.videoId) {
-      room.media = { videoId, title: item.title, playing: false, position: 0, at: Date.now(), by: user.username };
+      room.media = { videoId, title: item.title, playing: true, position: 0, at: Date.now() + START_LEAD_MS, rate: 1, by: user.username };
       io.to(room.code).emit('media', { ...room.media, event: 'load' });
       return;
     }
@@ -808,12 +862,81 @@ io.on('connection', (socket) => {
     if (!room) return;
     const i = room.queue.findIndex((q) => q.id === id);
     if (i < 0) return;
+    // You can always take back your own song; other people's need queue rights.
+    if (room.queue[i].byId !== user.id && !allowed(room, user.id, 'queue')) return deny('Only admins can remove other people’s songs right now.');
     room.queue.splice(i, 1);
     io.to(room.code).emit('queue', room.queue);
   });
   socket.on('queue:next', () => {
     if (!room) return;
-    if (!playNext(room, user.username)) socket.emit('chat-error', { error: 'Nothing in Up next yet.' });
+    if (!allowed(room, user.id, 'playback')) return deny('Only admins can skip songs right now.');
+    if (!playNext(room, user.username)) deny('Nothing in Up next yet.');
+  });
+
+  // ---- admin tools ----
+  const leaderId = () => room?.hostId;
+  const memberSockets = (userId) => [...room.members.entries()].filter(([, m]) => m.userId === userId).map(([sid]) => sid);
+  const nameOf = (userId) => [...room.members.values()].find((m) => m.userId === userId)?.username || 'Someone';
+  const adminCheck = (targetId) => {
+    if (!room || !isAdmin(room, user.id)) { deny('Only admins can do that.'); return false; }
+    if (targetId === undefined) return true;
+    if (typeof targetId !== 'string' || !memberSockets(targetId).length) { deny('That person isn’t in the room any more.'); return false; }
+    if (targetId === leaderId()) { deny('The party leader can’t be changed.'); return false; }
+    // Admins can manage members; acting on another admin is for the leader only.
+    if (isAdmin(room, targetId) && user.id !== leaderId()) { deny('Only the party leader can do that to another admin.'); return false; }
+    return true;
+  };
+  socket.on('admin:role', ({ userId, admin } = {}) => {
+    if (!room || !isAdmin(room, user.id)) return deny('Only admins can do that.');
+    if (admin === true) {
+      if (typeof userId !== 'string' || !memberSockets(userId).length) return deny('That person isn’t in the room any more.');
+      room.admins.add(userId);
+      room.chatMuted.delete(userId);
+      io.to(room.code).emit('notice', { text: `${user.username} made ${nameOf(userId)} an admin` });
+    } else {
+      if (!adminCheck(userId)) return;
+      if (user.id !== leaderId()) return deny('Only the party leader can remove an admin.');
+      room.admins.delete(userId);
+      io.to(room.code).emit('notice', { text: `${nameOf(userId)} is no longer an admin` });
+    }
+    io.to(room.code).emit('roles', rolesOf(room));
+  });
+  socket.on('admin:mute', ({ userId, muted } = {}) => {
+    if (!adminCheck(userId)) return;
+    if (muted) room.chatMuted.add(userId); else room.chatMuted.delete(userId);
+    io.to(room.code).emit('notice', { text: `${user.username} ${muted ? 'muted' : 'unmuted'} ${nameOf(userId)} in chat` });
+    io.to(room.code).emit('roles', rolesOf(room));
+  });
+  socket.on('admin:kick', ({ userId } = {}) => {
+    if (!adminCheck(userId)) return;
+    const name = nameOf(userId);
+    room.banned.add(userId);
+    room.admins.delete(userId);
+    for (const sid of memberSockets(userId)) {
+      const s = io.sockets.sockets.get(sid);
+      s?.emit('kicked', { by: user.username });
+      s?.disconnect(true); // runs their leave(): peers are told, cleanup happens
+    }
+    io.to(room.code).emit('notice', { text: `${user.username} removed ${name} from the room` });
+    io.to(room.code).emit('roles', rolesOf(room));
+  });
+  socket.on('admin:perms', (p = {}) => {
+    if (!room || !isAdmin(room, user.id)) return deny('Only admins can change room settings.');
+    for (const k of ['queue', 'playback', 'chat']) if (PERM_VALUES.includes(p[k])) room.perms[k] = p[k];
+    io.to(room.code).emit('roles', rolesOf(room));
+    io.to(room.code).emit('notice', { text: `${user.username} updated the room settings` });
+  });
+  socket.on('admin:chat-delete', ({ id } = {}) => {
+    if (!room || !isAdmin(room, user.id)) return deny('Only admins can delete messages.');
+    const i = room.chat.findIndex((m) => m.id === id);
+    if (i < 0) return;
+    room.chat.splice(i, 1);
+    io.to(room.code).emit('chat-deleted', { id });
+  });
+  socket.on('admin:chat-clear', () => {
+    if (!room || !isAdmin(room, user.id)) return deny('Only admins can clear the chat.');
+    room.chat.length = 0;
+    io.to(room.code).emit('chat-cleared', { by: user.username });
   });
 
   socket.on('rec', ({ on } = {}) => {
@@ -836,6 +959,8 @@ io.on('connection', (socket) => {
     if (room.members.size === 0) {
       room.emptySince = Date.now();
       freezeMedia(room);
+    } else {
+      ensureAdmin(room);
     }
     room = null;
   };

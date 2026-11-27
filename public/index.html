@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500..800&family=Fraunces:ital,opsz,wght,SOFT,WONK@1,9..144,300..500,0..100,0..1&family=Instrument+Sans:wght@400..600&family=Geist+Mono:wght@500&display=swap" rel="stylesheet">
   <!-- Bump ?v= when styles or scripts change, so browsers can't use an old cached copy. -->
-  <link rel="stylesheet" href="styles.css?v=15">
+  <link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -28,6 +28,7 @@
         <span>duet</span>
       </a>
       <div class="nav__right">
+        <a class="nav__link" href="#/faq">FAQ</a>
         <button class="idchip" id="idchip" type="button" title="Copy your ID">
           <span class="idchip__label">Your ID</span>
           <span class="mono" id="idchip-value"></span>
@@ -44,9 +45,9 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <!-- Relative paths: the site also runs from https://<user>.github.io/<repo>/ -->
-  <script src="config.js?v=15"></script>
+  <script src="config.js?v=16"></script>
   <!-- integrity = fingerprint of this exact file; the browser refuses it if the CDN copy is ever altered -->
   <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js" integrity="sha384-mkQ3/7FUtcGyoppY6bz/PORYoGqOl7/aSUMn2ymDOJcapfS6PHqxhRTMh1RR0Q6+" crossorigin="anonymous"></script>
-  <script type="module" src="app.js?v=15"></script>
+  <script type="module" src="app.js?v=16"></script>
 </body>
 </html>

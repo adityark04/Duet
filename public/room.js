@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=15';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=16';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -28,6 +28,8 @@ const I = {
   leave: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3M8 14l-4-4 4-4M4 10h9"/></svg>',
   send: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10h11M10 4.5l5.5 5.5-5.5 5.5"/></svg>',
   skip: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5v11l8-5.5-8-5.5Z" fill="currentColor"/><path d="M15.5 4.5v11"/></svg>',
+  speaker: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5h3l4-3.5v12l-4-3.5h-3z" fill="currentColor" fill-opacity=".2"/><path d="M14 7.5a3.5 3.5 0 0 1 0 5M16.2 5.3a6.5 6.5 0 0 1 0 9.4"/></svg>',
+  more: '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15" cy="10" r="1.6"/></svg>',
   x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
@@ -125,7 +127,8 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     blocked: false,
   };
   const serverNow = () => Date.now() + S.offset;
-  const expectedPos = (m = S.media) => (m.playing ? m.position + (serverNow() - m.at) / 1000 : m.position);
+  // Where the song should be right now, per the room clock. Negative = a scheduled start not reached yet.
+  const expectedPos = (m = S.media) => (m.playing ? m.position + ((serverNow() - m.at) / 1000) * (m.rate || 1) : m.position);
 
   main.innerHTML = `
     <section class="room">
@@ -138,6 +141,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
           <div class="controls">
             ${solo ? '' : `<div class="codechip" id="r-codechip" hidden><span class="label">Room code</span><span class="mono" id="r-code"></span><button class="btn btn--quiet btn--sm iconbtn" style="width:36px;height:36px" type="button" id="r-copycode" aria-label="Copy room code">${I.copy}</button></div>
             <button class="btn btn--line" type="button" id="r-share" hidden>Copy invite link</button>`}
+            ${solo ? '' : `<button class="btn btn--line" type="button" id="r-settings" hidden>Room settings</button>`}
             <a class="btn btn--quiet" href="#/" id="r-leave">${I.leave} Leave</a>
           </div>
         </div>
@@ -151,10 +155,11 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
                   <div class="screen__empty-inner">
                     <div class="eq eq--accent" aria-hidden="true" style="height:48px"><i></i><i></i><i></i><i></i><i></i></div>
                     <h2 style="font-size:30px">Put a record <em>on</em></h2>
-                    <p>Choose a video that already shows the lyrics on screen. Searching “song name karaoke” or “song name lyrics” on YouTube works well.</p>
+                    <p>Add a lyrics or karaoke video in Up next.</p>
                   </div>
                 </div>
                 <button class="screen__shield" id="r-shield" type="button" aria-label="Play or pause" hidden></button>
+                <button class="soundpill" id="r-sound" type="button" hidden>${I.speaker}<span>Playing muted · tap for sound</span></button>
                 <div class="reactions" id="r-reacts" aria-hidden="true"></div>
                 <div class="screen__badge" id="r-recbadge" hidden><span class="recdot"></span><span id="r-recnames"></span></div>
               </div>
@@ -168,12 +173,15 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
                   <button class="btn btn--primary btn--round" type="button" id="r-play" aria-label="Play" disabled>${I.play}</button>
                   <div class="nowplaying"><span class="nowplaying__t" id="r-title">Nothing on the turntable yet</span><span class="nowplaying__k" id="r-by">Add a song from Up next</span></div>
                   <div class="transport__right">
+                    <label class="rate" title="Playback speed, for everyone"><span class="sr">Speed</span>
+                      <select id="r-rate" disabled>${[0.5, 0.75, 1, 1.25, 1.5].map((r) => `<option value="${r}"${r === 1 ? ' selected' : ''}>${r}×</option>`).join('')}</select>
+                    </label>
                     <button class="btn btn--tonal iconbtn" type="button" id="r-restart" aria-label="Start from the beginning" disabled>${I.restart}</button>
                     <button class="btn btn--tonal iconbtn" type="button" id="r-skip" aria-label="Skip to the next song" disabled>${I.skip}</button>
                   </div>
                 </div>
                 <div class="deck__foot">
-                  <p class="tip">${I.info}<span><strong>Pick a lyrics or karaoke video.</strong> ${solo ? 'Headphones keep the music out of your mic.' : 'Wear headphones so the music doesn’t echo back to the room.'}</span></p>
+                  <span class="label" id="r-perm-note"></span>
                   <button class="btn btn--line btn--rec" type="button" id="r-rec" aria-pressed="false" disabled>${I.rec}<span>Record song</span></button>
                 </div>
               </div>
@@ -190,7 +198,6 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
                     <button class="btn btn--tonal" type="submit" value="queue">Add to Up next</button>
                     <button class="btn btn--line" type="submit" value="now">Play now</button>
                   </div>
-                  <p class="field__hint">Pick a video that shows the lyrics. Search “song name karaoke” on YouTube.</p>
                 </form>
               </div>
             </section>
@@ -211,17 +218,15 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
                   <label for="r-boost" class="label">Mic volume</label>
                   <span class="label mono" id="r-boostval"></span>
                 </div>
-                <input type="range" id="r-boost" min="0.5" max="4" step="0.1" aria-describedby="r-boosthint">
+                <input type="range" id="r-boost" min="0.5" max="4" step="0.1">
                 <div class="meter" aria-hidden="true"><i id="r-meter"></i></div>
-                <p class="field__hint" id="r-boosthint">Sing a line: the bar should reach the middle, without hitting the end.</p>
-                <label class="switch"><input type="checkbox" id="r-hp"><span><strong>I’m wearing headphones</strong><small>Turns off echo cancellation for a clearer, fuller voice. Only with headphones, or the music echoes.</small></span></label>
+                <label class="switch"><input type="checkbox" id="r-hp"><span><strong>I’m wearing headphones</strong><small>Clearer voice</small></span></label>
               </div>
               <p id="r-micwarn" hidden class="person__state person__state--warn" style="font-size:14px"></p>
             </section>
             ${solo ? '' : `<div class="card chat">
               <div class="card__head"><h2>Live chat</h2><span class="label" id="r-chatcount"></span></div>
               <ol class="chat__list" id="r-chat" aria-live="polite" aria-label="Chat messages">
-                <li class="msg msg--sys">Say hi. Messages stay in this room only.</li>
               </ol>
               <form class="chat__form" id="r-chatform" novalidate>
                 <label for="r-chatinput" style="position:absolute;left:-9999px">Message</label>
@@ -230,15 +235,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
               </form>
               <div class="react-row" id="r-reactrow">${['👏', '🔥', '❤️', '🎤', '😂'].map((e) => `<button type="button" data-e="${e}" aria-label="Send ${e}">${e}</button>`).join('')}</div>
             </div>`}
-            <div class="card">
-              <div class="card__head"><h2>How recording works</h2></div>
-              <ol class="steps">
-                <li>Turn your camera on in <strong>Voice Party</strong>. That panel is what gets filmed.</li>
-                <li>Press <strong>Record song</strong>. To keep the music, pick <strong>this tab</strong> and switch on <strong>Also share tab audio</strong>.</li>
-                <li>The song starts from the top${solo ? '' : ' for everyone'}. Sing.</li>
-                <li>When it ends, download your karaoke as an MP4.</li>
-              </ol>
-            </div>
+            <a class="help-link" href="#/faq">How it works &amp; FAQ</a>
           </aside>
         </div>
       </div>
@@ -276,6 +273,22 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       </div>
     </dialog>
 
+    <dialog id="d-settings" aria-labelledby="d-settings-h">
+      <form method="dialog" class="dlg">
+        <h2 id="d-settings-h" style="font-size:24px">Room <em>settings</em></h2>
+        <div class="perm-grid">
+          ${[['queue', 'Who can add songs'], ['playback', 'Who controls the music'], ['chat', 'Who can chat']].map(([k, l]) => `
+          <label class="perm"><span>${l}</span>
+            <select data-perm="${k}"><option value="everyone">Everyone</option><option value="admins">Admins only</option></select>
+          </label>`).join('')}
+        </div>
+        <div class="dlg__actions">
+          <button class="btn btn--quiet" type="button" id="d-settings-clear">Clear chat</button>
+          <button class="btn btn--primary" value="close">Done</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="d-share" aria-labelledby="d-share-h">
       <form method="dialog" class="dlg">
         <div style="display:grid;gap:8px"><span class="label">Private room ready</span><h2 id="d-share-h" style="font-size:28px">Share this code with your friends</h2>
@@ -292,6 +305,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   const $ = (id) => document.getElementById(id);
   const els = {
     name: $('r-name'), kind: $('r-kind'), screen: $('r-screen'), empty: $('r-empty'), shield: $('r-shield'),
+    rate: $('r-rate'), sound: $('r-sound'), permNote: $('r-perm-note'),
     play: $('r-play'), restart: $('r-restart'), mic: $('r-mic'), cam: $('r-cam'), rec: $('r-rec'), title: $('r-title'),
     bar: $('r-bar'), fill: $('r-fill'), cur: $('r-cur'), dur: $('r-dur'), tiles: $('r-tiles'), count: $('r-count'),
     audio: $('r-audio'), reacts: $('r-reacts'), recbadge: $('r-recbadge'), recnames: $('r-recnames'), micwarn: $('r-micwarn'),
@@ -301,6 +315,42 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   };
 
   // ---------- Up next ----------
+  // ---------- party roles ----------
+  // Leader = whoever created the room. Admins can manage people and room settings.
+  // The server enforces every rule; the page just mirrors them so controls make sense.
+  S.roles = { leaderId: null, admins: [], perms: { queue: 'everyone', playback: 'everyone', chat: 'everyone' }, chatMuted: [] };
+  const isAdminId = (uid) => S.roles.admins.includes(uid);
+  const amAdmin = () => solo || isAdminId(me.id);
+  const amLeader = () => S.roles.leaderId === me.id;
+  const can = (what) => solo || S.roles.perms[what] === 'everyone' || amAdmin();
+  const chatMutedMe = () => !solo && S.roles.chatMuted.includes(me.id);
+
+  function applyPermissions() {
+    const play = can('playback');
+    const loaded = !!S.media.videoId;
+    for (const b of [els.play, els.restart, els.rate]) b.disabled = !loaded || !play;
+    els.skip.disabled = !play || !S.queue.length;
+    els.bar.classList.toggle('is-locked', !play);
+    els.bar.setAttribute('aria-disabled', String(!play));
+    const queue = can('queue');
+    $('r-url').disabled = !queue;
+    $('r-load').querySelector('button[value="queue"]').disabled = !queue;
+    $('r-load').querySelector('button[value="now"]').disabled = !play;
+    const notes = [];
+    if (!play) notes.push('admins control the music');
+    if (!queue) notes.push('admins add songs');
+    els.permNote.textContent = notes.length ? `In this room, ${notes.join(' and ')}.` : '';
+    if (els.chatinput) {
+      const chatOk = can('chat') && !chatMutedMe();
+      els.chatinput.disabled = !chatOk;
+      els.chatform.querySelector('button').disabled = !chatOk;
+      els.chatinput.placeholder = chatMutedMe() ? 'An admin muted you in chat' : !can('chat') ? 'Only admins can chat right now' : 'Say something nice…';
+      els.chat.classList.toggle('can-mod', amAdmin());
+    }
+    const settings = $('r-settings');
+    if (settings) settings.hidden = solo || !amAdmin();
+  }
+
   S.queue = [];
   function renderQueue() {
     const rows = [];
@@ -309,14 +359,16 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         <div style="min-width:0"><div class="qitem__title">${esc(S.media.title || 'Loading title…')}</div><div class="qitem__by">Now playing${S.media.by ? ` · added by ${esc(S.media.by)}` : ''}</div></div><span></span></li>`);
     }
     for (const q of S.queue) {
+      // You can take back your own song; removing others' needs Up next rights.
+      const removable = solo || q.byId === me.id || can('queue');
       rows.push(`<li class="qitem"><img class="qitem__thumb" src="${thumb(q.videoId)}" alt="" loading="lazy">
         <div style="min-width:0"><div class="qitem__title">${esc(q.title || 'YouTube video')}</div><div class="qitem__by">Added by ${esc(q.by)}</div></div>
-        <button class="qitem__x" type="button" data-remove="${esc(q.id)}" aria-label="Remove ${esc(q.title || 'this song')} from Up next">${I.x}</button></li>`);
+        ${removable ? `<button class="qitem__x" type="button" data-remove="${esc(q.id)}" aria-label="Remove ${esc(q.title || 'this song')} from Up next">${I.x}</button>` : '<span></span>'}</li>`);
     }
-    if (!S.queue.length) rows.push(`<li class="queue__empty">${S.media.videoId ? 'Nothing lined up. Add the next song below.' : 'Paste a lyrics or karaoke video from YouTube to start.'}</li>`);
+    if (!S.queue.length) rows.push(`<li class="queue__empty">${S.media.videoId ? 'Nothing lined up yet.' : 'Paste a YouTube link to start.'}</li>`);
     els.queue.innerHTML = rows.join('');
     els.qcount.textContent = S.queue.length ? `${S.queue.length} waiting` : '';
-    els.skip.disabled = !S.queue.length;
+    applyPermissions();
   }
   els.queue.addEventListener('click', (e) => {
     const b = e.target.closest('[data-remove]');
@@ -327,7 +379,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   function playNextLocal() {
     const n = S.queue.shift();
     if (!n) return false;
-    applyMedia({ videoId: n.videoId, title: n.title, playing: true, position: 0, at: Date.now(), by: n.by });
+    applyMedia({ videoId: n.videoId, title: n.title, playing: true, position: 0, at: Date.now() + 800, rate: 1, by: n.by });
     renderQueue();
     return true;
   }
@@ -343,11 +395,15 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       <video class="tile__video" autoplay playsinline muted hidden></video>
       <div class="tile__avatar"><span class="avatar"></span></div>
       <span class="tile__state"></span>
+      <span class="tile__role" hidden></span>
+      <button class="tile__menu" type="button" hidden aria-haspopup="menu">${I.more}</button>
       <div class="tile__foot"><span class="tile__name"></span><span class="tile__mic" hidden>${I.micOff}</span></div>`;
     t = {
       el, video: el.querySelector('video'), avatar: el.querySelector('.avatar'), name: el.querySelector('.tile__name'),
       mic: el.querySelector('.tile__mic'), state: el.querySelector('.tile__state'),
+      role: el.querySelector('.tile__role'), menu: el.querySelector('.tile__menu'),
     };
+    t.menu.addEventListener('click', (e) => { e.stopPropagation(); openPersonMenu(t.menu, t.userId, t.username); });
     tiles.set(key, t);
     els.tiles.appendChild(el);
     return t;
@@ -361,9 +417,60 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       if (t.video.srcObject) t.video.srcObject = null;
     }
   }
+  function setTileRole(t, uid, username) {
+    t.userId = uid; t.username = username;
+    const role = solo ? '' : S.roles.leaderId === uid ? 'Leader' : isAdminId(uid) ? 'Admin' : '';
+    t.role.hidden = !role;
+    t.role.textContent = role;
+    // Admins get a menu on other people (acting on another admin is for the leader).
+    const manageable = !solo && uid !== me.id && amAdmin() && uid !== S.roles.leaderId && (!isAdminId(uid) || amLeader());
+    t.menu.hidden = !manageable;
+    t.menu.setAttribute('aria-label', `Manage ${username}`);
+  }
+
+  // ---------- person menu (admins) ----------
+  const pop = document.createElement('div');
+  pop.className = 'popmenu'; pop.setAttribute('role', 'menu'); pop.hidden = true;
+  document.body.appendChild(pop);
+  function closePersonMenu() { pop.hidden = true; pop.innerHTML = ''; }
+  function openPersonMenu(anchor, uid, username) {
+    if (!pop.hidden && pop.dataset.uid === uid) return closePersonMenu();
+    const admin = isAdminId(uid);
+    const muted = S.roles.chatMuted.includes(uid);
+    const items = [];
+    if (!admin) items.push(['promote', 'Make admin']);
+    else if (amLeader()) items.push(['demote', 'Remove admin']);
+    items.push([muted ? 'unmute' : 'mute', muted ? 'Unmute in chat' : 'Mute in chat']);
+    items.push(['kick', 'Remove from room']);
+    pop.dataset.uid = uid;
+    pop.innerHTML = `<p class="popmenu__h">${esc(username)}</p>` + items.map(([a, l]) => `<button type="button" role="menuitem" data-act="${a}"${a === 'kick' ? ' class="danger"' : ''}>${l}</button>`).join('');
+    pop.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.min(window.innerHeight - pop.offsetHeight - 8, r.bottom + 6)}px`;
+    pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, r.right - pop.offsetWidth))}px`;
+    pop.querySelector('button')?.focus();
+  }
+  pop.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const uid = pop.dataset.uid;
+    const act = b.dataset.act;
+    if (act === 'kick' && !b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Tap again to remove'; return; }
+    if (act === 'promote') S.socket.emit('admin:role', { userId: uid, admin: true });
+    if (act === 'demote') S.socket.emit('admin:role', { userId: uid, admin: false });
+    if (act === 'mute' || act === 'unmute') S.socket.emit('admin:mute', { userId: uid, muted: act === 'mute' });
+    if (act === 'kick') S.socket.emit('admin:kick', { userId: uid });
+    closePersonMenu();
+  });
+  const onDocClick = (e) => { if (!pop.hidden && !pop.contains(e.target)) closePersonMenu(); };
+  const onDocKey = (e) => { if (e.key === 'Escape') closePersonMenu(); };
+  document.addEventListener('click', onDocClick);
+  document.addEventListener('keydown', onDocKey);
+
   function renderTiles() {
     const keep = new Set(['me']);
     const mine = tileFor('me');
+    setTileRole(mine, me.id, me.username);
     mine.avatar.textContent = initials(me.username);
     mine.avatar.style.background = colorFor(me.id);
     mine.name.textContent = `${me.username} (you)`;
@@ -375,6 +482,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     for (const [sid, p] of S.peers) {
       keep.add(sid);
       const t = tileFor(sid);
+      setTileRole(t, p.userId, p.username);
       t.avatar.textContent = initials(p.username);
       t.avatar.style.background = colorFor(p.userId);
       t.name.textContent = p.username;
@@ -536,6 +644,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   function resumeCtx() {
     if (S.ctx && S.ctx.state === 'suspended') S.ctx.resume().catch(() => {});
     els.audio?.querySelectorAll('audio').forEach((a) => { if (a.paused && a.srcObject) a.play().catch(() => {}); });
+    unmuteIfAutoMuted(); // any tap anywhere brings the music's sound in
   }
 
   function setMicMuted(muted) {
@@ -759,7 +868,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
           onError: (e) => {
             // 101/150: uploader blocks embedding; 100: removed/private; 2/5: bad ID or player error; 153: site address not accepted.
             S.ytError = e.data;
-            S.blocked = false;
+            els.sound.hidden = true;
             const msg = e.data === 101 || e.data === 150
               ? 'The uploader doesn’t allow this video on other sites. Paste a different upload of the song.'
               : e.data === 100
@@ -786,8 +895,16 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     const playing = e.data === YT.PlayerState.PLAYING;
     els.play.innerHTML = playing ? I.pause : I.play;
     els.play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-    if (playing) S.blocked = false;
     if (playing && S.hold) S.player.pauseVideo(); // stay quiet while the save dialog is up
+    // Waiting for a tap on the video (strict devices) and the tap paused it: that tap unlocks sound.
+    if (S.needVideoTap && e.data === YT.PlayerState.PAUSED && S.media.playing && !S.hold) {
+      S.player.unMute();
+      S.player.seekTo(Math.max(0, expectedPos()), true);
+      S.player.playVideo();
+      setTimeout(() => {
+        try { if (!S.player.isMuted()) { S.autoMuted = false; S.needVideoTap = false; els.sound.hidden = true; els.shield.hidden = false; els.sound.querySelector('span').textContent = 'Playing muted · tap for sound'; } } catch {}
+      }, 500);
+    }
     if (playing || e.data === YT.PlayerState.CUED) setTitle(S.player.getVideoData?.().title);
     if (e.data === YT.PlayerState.ENDED) onSongEnded();
   }
@@ -796,28 +913,28 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     S.media = { ...S.media, ...m };
     if (!m.videoId) return;
     els.empty.hidden = true;
-    els.shield.hidden = false;
+    els.shield.hidden = !!S.needVideoTap; // while waiting for a tap on the video, let it reach the player
     els.play.disabled = false;
     els.restart.disabled = false;
     els.rec.disabled = false;
     els.title.textContent = m.title || S.media.title || 'Loading…';
     els.by.textContent = S.media.by ? `Added by ${S.media.by}` : 'Now playing';
     renderQueue();
+    applyPermissions();
     await ensurePlayer(m.videoId);
     if (S.disposed || !S.player) return;
+    clearTimeout(S.startTimer);
+    applyRate();
     const pos = expectedPos(S.media);
     if (S.media.playing && !S.hold) {
+      if (pos < 0) {
+        // A scheduled start: the song is loaded and waiting; everyone starts on the same beat.
+        S.player.pauseVideo();
+        S.startTimer = setTimeout(() => applyMedia(S.media), Math.min(5000, -pos * 1000));
+        return;
+      }
       S.player.seekTo(pos, true);
-      S.player.playVideo();
-      setTimeout(() => {
-        if (S.disposed || !S.player || !S.media.playing || S.hold) return;
-        const st = S.player.getPlayerState();
-        if (S.ytError) return; // YouTube refused the video: tapping won't help, the error message says why
-        if (st !== window.YT.PlayerState.PLAYING && st !== window.YT.PlayerState.BUFFERING) {
-          S.blocked = true;
-          toast('Tap the video to start playback in sync.');
-        }
-      }, 1800);
+      startPlayback();
     } else {
       // seekTo on a cued video starts playback, so only seek when needed and pause after.
       const st = S.player.getPlayerState();
@@ -828,28 +945,90 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     }
   }
 
-  function send(action, position) {
+  // Play now. If the browser won't allow sound yet (nobody has tapped this page since it loaded,
+  // e.g. you arrived from an invite link), play muted so you stay in sync, and offer a tap for sound.
+  function startPlayback() {
+    S.player.playVideo();
+    clearTimeout(S.checkTimer);
+    S.checkTimer = setTimeout(() => {
+      if (S.disposed || !S.player || !S.media.playing || S.hold || S.ytError) return;
+      const st = S.player.getPlayerState();
+      if (st === window.YT.PlayerState.PLAYING || st === window.YT.PlayerState.BUFFERING) return;
+      S.player.mute();
+      S.autoMuted = true;
+      S.player.seekTo(Math.max(0, expectedPos()), true);
+      S.player.playVideo();
+      els.sound.hidden = false;
+    }, 1200);
+  }
+  function unmuteIfAutoMuted() {
+    if (!S.autoMuted || !S.player) return false;
+    S.player.unMute();
+    if (S.media.playing && !S.hold && !isPlaying()) S.player.playVideo();
+    S.unmutedAt = Date.now();
+    // Strict devices (iPhone/iPad, some phones) only accept a tap on the YouTube player itself.
+    // If the sound didn't come in, keep playing muted and let the next tap reach the video.
+    setTimeout(() => {
+      if (S.disposed || !S.player) return;
+      let ok = false;
+      try { ok = !S.player.isMuted() && (!S.media.playing || S.player.getPlayerState() === window.YT.PlayerState.PLAYING); } catch {}
+      if (ok) { S.autoMuted = false; S.needVideoTap = false; els.sound.hidden = true; els.shield.hidden = !S.media.videoId; return; }
+      S.player.mute();
+      if (S.media.playing && !S.hold) { S.player.seekTo(Math.max(0, expectedPos()), true); S.player.playVideo(); }
+      S.needVideoTap = true;
+      els.shield.hidden = true; // let taps land on the YouTube player
+      els.sound.querySelector('span').textContent = 'Tap the video for sound';
+    }, 700);
+    return true;
+  }
+  // A tap inside the YouTube player moves focus into it; that tap counts for the player, so retry there.
+  const onWindowBlur = () => {
+    setTimeout(() => {
+      if (!S.needVideoTap || document.activeElement?.tagName !== 'IFRAME') return;
+      S.player.unMute();
+      if (S.media.playing) { S.player.seekTo(Math.max(0, expectedPos()), true); S.player.playVideo(); }
+      setTimeout(() => {
+        try {
+          if (!S.player.isMuted()) {
+            S.autoMuted = false; S.needVideoTap = false; els.sound.hidden = true; els.shield.hidden = false;
+            els.sound.querySelector('span').textContent = 'Playing muted · tap for sound';
+          }
+        } catch {}
+      }, 500);
+    }, 0);
+  };
+  window.addEventListener('blur', onWindowBlur);
+  function applyRate() {
+    const r = S.media.rate || 1;
+    try { if (S.player.getPlaybackRate() !== r) S.player.setPlaybackRate(r); } catch {}
+    els.rate.value = String(r);
+  }
+
+  function send(action, position, extra = {}) {
     if (!S.media.videoId) return;
     if (solo) {
       const m = { ...S.media, at: Date.now() };
       if (action === 'play') Object.assign(m, { playing: true, position });
       if (action === 'pause' || action === 'ended') Object.assign(m, { playing: false, position });
       if (action === 'seek') Object.assign(m, { position });
+      if (action === 'rate') Object.assign(m, { position: Math.max(0, expectedPos()), rate: extra.rate });
       applyMedia(m);
     } else {
-      S.socket.emit('media:control', { action, position });
+      S.socket.emit('media:control', { action, position, ...extra });
     }
   }
 
   const curTime = () => (S.player && S.playerReady ? S.player.getCurrentTime() || 0 : 0);
   const isPlaying = () => S.player && S.playerReady && S.player.getPlayerState() === window.YT.PlayerState.PLAYING;
 
-  els.play.addEventListener('click', () => send(isPlaying() || (S.media.playing && !S.blocked) ? 'pause' : 'play', curTime()));
+  els.play.addEventListener('click', () => send(S.media.playing ? 'pause' : 'play', curTime()));
   els.restart.addEventListener('click', () => send(S.media.playing ? 'play' : 'seek', 0));
+  els.rate.addEventListener('change', () => send('rate', curTime(), { rate: Number(els.rate.value) }));
+  els.sound.addEventListener('click', () => unmuteIfAutoMuted());
   els.shield.addEventListener('click', () => {
-    resumeCtx();
-    if (S.blocked) { S.blocked = false; applyMedia(S.media); return; }
-    els.play.click();
+    // The tap that just switched the sound on shouldn't also pause the song.
+    if (Date.now() - (S.unmutedAt || 0) < 800 || unmuteIfAutoMuted()) return;
+    if (can('playback')) els.play.click();
   });
 
   const seekFromEvent = (clientX) => {
@@ -879,13 +1058,17 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     els.bar.setAttribute('aria-valuenow', String(Math.round(cur)));
   }, 250));
 
-  // Keep everyone within ~0.8s of the room clock.
+  // Keep everyone within half a second of the room clock, and restart a player that stalled.
   if (!solo) {
     S.timers.push(setInterval(() => {
-      if (!S.media.playing || S.hold || !isPlaying() || S.rec?.starting) return;
-      const drift = curTime() - expectedPos();
-      if (Math.abs(drift) > 0.8) S.player.seekTo(expectedPos(), true);
-    }, 4000));
+      if (!S.player || !S.playerReady || !S.media.playing || S.hold || S.rec?.starting || S.ytError) return;
+      const want = expectedPos();
+      if (want < 0) return; // scheduled start not reached
+      const st = S.player.getPlayerState();
+      if (st === window.YT.PlayerState.PAUSED || st === window.YT.PlayerState.CUED) { S.player.seekTo(want, true); startPlayback(); return; }
+      if (st !== window.YT.PlayerState.PLAYING) return;
+      if (Math.abs(curTime() - want) > 0.5) S.player.seekTo(want, true);
+    }, 2000));
   }
 
   $('r-load').addEventListener('submit', async (e) => {
@@ -899,15 +1082,17 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     const info = await videoInfo(id);
     input.value = '';
     const item = { videoId: id, title: info.title };
-    if (mode === 'now' || !S.media.videoId) {
+    // "Play now" switches songs (needs music control). Adding to an empty room goes via Up next,
+    // which the server starts straight away, so members who may only add songs can still start one.
+    if (mode === 'now' || (solo && !S.media.videoId)) {
       if (S.rec) stopRecording('switched');
-      if (solo) applyMedia({ ...item, playing: false, position: 0, at: Date.now(), by: me.username });
+      if (solo) applyMedia({ ...item, playing: true, position: 0, at: Date.now() + 800, rate: 1, by: me.username });
       else S.socket.emit('media:load', item);
       return;
     }
     if (solo) { S.queue.push({ ...item, id: Math.random().toString(36).slice(2, 10), by: me.username }); renderQueue(); }
     else S.socket.emit('queue:add', item);
-    toast(`Added to Up next${info.title ? `: ${info.title}` : ''}`);
+    if (S.media.videoId) toast(`Added to Up next${info.title ? `: ${info.title}` : ''}`);
   });
   els.skip.addEventListener('click', () => {
     if (S.rec) stopRecording('switched');
@@ -1391,12 +1576,34 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     } else {
       const mine = item.userId === me.id;
       li.className = 'msg' + (mine ? ' msg--me' : '');
-      li.innerHTML = `<div class="msg__meta"><span class="msg__who">${esc(mine ? 'You' : item.username)}</span><time class="msg__time">${clock(item.at)}</time></div><p class="msg__text">${esc(item.text)}</p>`;
+      if (item.id) li.dataset.id = item.id;
+      li.innerHTML = `<div class="msg__meta"><span class="msg__who">${esc(mine ? 'You' : item.username)}</span><time class="msg__time">${clock(item.at)}</time>`
+        + `${item.id ? `<button class="msg__del" type="button" data-del="${esc(item.id)}" aria-label="Delete message">${I.x}</button>` : ''}</div><p class="msg__text">${esc(item.text)}</p>`;
     }
     els.chat.appendChild(li);
     while (els.chat.children.length > 120) els.chat.firstElementChild.remove();
     if (nearBottom || item.userId === me.id) els.chat.scrollTop = els.chat.scrollHeight;
   }
+  // ---------- room settings (admins) ----------
+  const dSettings = $('d-settings');
+  function syncSettingsForm() {
+    dSettings?.querySelectorAll('select[data-perm]').forEach((s) => { s.value = S.roles.perms[s.dataset.perm]; });
+  }
+  $('r-settings')?.addEventListener('click', () => { syncSettingsForm(); dSettings.showModal(); });
+  dSettings?.querySelectorAll('select[data-perm]').forEach((s) => s.addEventListener('change', () => {
+    S.socket?.emit('admin:perms', { [s.dataset.perm]: s.value });
+  }));
+  $('d-settings-clear')?.addEventListener('click', (e) => {
+    const b = e.currentTarget;
+    if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Tap again to clear'; return; }
+    delete b.dataset.armed; b.textContent = 'Clear chat';
+    S.socket?.emit('admin:chat-clear');
+  });
+
+  els.chat?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-del]');
+    if (b && amAdmin()) S.socket?.emit('admin:chat-delete', { id: b.dataset.del });
+  });
   els.chatform?.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = els.chatinput.value.trim();
@@ -1459,6 +1666,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         S.socket.emit('state', { mic: !S.micMuted, cam: !!S.camTrack });
         setRecorders(res.recorders || []);
         (res.chat || []).forEach(addChat);
+        if (res.roles) S.roles = res.roles;
         S.queue = res.queue || [];
         renderQueue();
         renderTiles();
@@ -1467,7 +1675,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       });
     });
     S.socket.on('disconnect', (reason) => {
-      if (!S.disposed && reason !== 'io client disconnect') toast('Connection lost. Reconnecting…');
+      if (!S.disposed && !S.kicked && reason !== 'io client disconnect') toast('Connection lost. Reconnecting…');
     });
     S.socket.on('peer-joined', (p) => {
       S.pendingInfo.set(p.socketId, p);
@@ -1499,6 +1707,16 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     S.socket.on('react', ({ emoji, username }) => floatReaction(emoji, username));
     S.socket.on('chat', addChat);
     S.socket.on('chat-error', ({ error }) => toast(error));
+    S.socket.on('notice', ({ text }) => addChat({ system: true, text }));
+    S.socket.on('roles', (r) => { S.roles = r; closePersonMenu(); renderTiles(); renderQueue(); applyPermissions(); syncSettingsForm(); });
+    S.socket.on('chat-deleted', ({ id }) => els.chat?.querySelector(`li[data-id="${CSS.escape(id)}"]`)?.remove());
+    S.socket.on('chat-cleared', ({ by }) => { if (els.chat) els.chat.innerHTML = ''; addChat({ system: true, text: `${by} cleared the chat` }); });
+    S.socket.on('kicked', ({ by }) => {
+      S.kicked = true;
+      S.socket.disconnect();
+      for (const sid of [...S.peers.keys()]) closePeer(sid);
+      showError(`${by} removed you from this room.`);
+    });
     S.socket.on('slow-down', () => toast('Easy there. Some of your clicks were ignored.'));
   }
 
@@ -1549,5 +1767,10 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     try { S.player?.destroy(); } catch {}
     try { S.ctx?.close(); } catch {}
     document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+    clearTimeout(S.startTimer); clearTimeout(S.checkTimer);
+    pop.remove();
+    window.removeEventListener('blur', onWindowBlur);
+    document.removeEventListener('click', onDocClick);
+    document.removeEventListener('keydown', onDocKey);
   };
 }

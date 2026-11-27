@@ -1,5 +1,5 @@
 // Keep ?v= in step with index.html and room.js (the same URL = the same module instance).
-import { mountRoom } from './room.js?v=15';
+import { mountRoom } from './room.js?v=16';
 
 // ---------- state ----------
 const store = {
@@ -189,7 +189,7 @@ function viewAuth(mode) {
             <div class="form__status" role="status" id="authstatus"></div>
             <button class="btn btn--primary btn--block btn--lg" type="submit">${isSignup ? 'Create account' : 'Sign in'}</button>
           </form>
-          <p class="auth__switch">${isSignup ? 'Have an account? <a href="#/login">Sign in</a>' : 'New here? <a href="#/signup">Create an account</a>'}</p>
+          <p class="auth__switch">${isSignup ? 'Have an account? <a href="#/login">Sign in</a>' : 'New here? <a href="#/signup">Create an account</a>'} · <a href="#/faq">How it works</a></p>
         </div>
         </div>
       </div>
@@ -254,7 +254,7 @@ function viewHome() {
               <a class="btn btn--primary btn--lg" href="#/private">Start a private room</a>
               <a class="btn btn--line btn--lg" href="#/public">Browse public rooms</a>
             </div>
-            <p class="hero__note">The lights are low and the mic is warm. Line up songs, see each other on camera, and record the whole night.</p>
+            <span></span>
             <a class="capsule" href="#/solo" aria-label="Sing solo">
               <span class="capsule__play"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6 4.5v11a.8.8 0 0 0 1.2.7l8.6-5.5a.8.8 0 0 0 0-1.4L7.2 3.8A.8.8 0 0 0 6 4.5Z"/></svg></span>
               <span class="capsule__t"><strong>Solo spotlight</strong><span>Warm up on your own</span></span>
@@ -280,7 +280,7 @@ function viewHome() {
           </a>
         </div>
         <div class="joinbar enter">
-          <div><h3 style="font-size:22px">Got a room code?</h3><p class="muted" style="font-size:14px">Five letters and numbers, like K7Q2M.</p></div>
+          <h3 style="font-size:22px">Got a room code?</h3>
           <form id="quickjoin" novalidate>
             <label class="label" for="qcode" style="position:absolute;left:-9999px">Room code</label>
             <input class="input input--code" id="qcode" maxlength="5" autocomplete="off" spellcheck="false" placeholder="•••••">
@@ -357,7 +357,7 @@ function viewPrivate() {
     <section class="page">
       <div class="wrap" style="max-width:1040px">
         <a class="back" href="#/">${BACK} Home</a>
-        <div class="head enter"><h1 style="font-size:clamp(36px,4.4vw,56px)">Private room</h1><p class="lead measure">Only people with the 5-character code can get in. Share it in your group chat.</p></div>
+        <div class="head enter"><h1 style="font-size:clamp(36px,4.4vw,56px)">Private room</h1></div>
         <div class="split enter">
           <form class="panel" id="create" novalidate>
             <div style="display:grid;gap:4px"><h2 style="font-size:24px">Create a room</h2><p class="muted">You’ll get a code to share.</p></div>
@@ -391,6 +391,51 @@ function viewPrivate() {
   });
 }
 
+// ---------- FAQ: every "how it works" explanation lives here ----------
+const FAQ = [
+  ['How do I start a karaoke party?', `<ol>
+    <li>Open <strong>Private room</strong>, choose how many people (5–10) and create it.</li>
+    <li>Share the 5-character code or the invite link with your friends.</li>
+    <li>Paste a YouTube link in <strong>Up next</strong>. Pick a video that already shows the lyrics: search “song name karaoke” on YouTube.</li>
+    <li>The song starts for everyone at the same moment. Sing!</li></ol>`],
+  ['How does recording work?', `<ol>
+    <li>Turn your camera on in <strong>Voice Party</strong>. That panel is what gets filmed.</li>
+    <li>Press <strong>Record song</strong>. To include the music, pick <strong>this tab</strong> when your browser asks what to share, and switch on <strong>Also share tab audio</strong>.</li>
+    <li>The song starts from the top for everyone. Sing.</li>
+    <li>When it ends, the song pauses and you download your karaoke as an MP4.</li></ol>
+    <p>Recording the music needs Chrome or Edge on a computer. Other browsers record voices only.</p>`],
+  ['Why does the video say “Playing muted · tap for sound”?', `<p>Browsers don’t let a page start sound until you’ve tapped or clicked something on it (for example after opening an invite link or refreshing). The song keeps playing in sync, muted, until you tap anywhere on the page once.</p>`],
+  ['Does everyone need to press play?', `<p>No. When one person plays, pauses, skips, jumps to a point or changes the speed, it happens for everyone. New songs start for everybody at the same moment.</p>`],
+  ['How do I make my voice louder or clearer?', `<ul>
+    <li>Raise <strong>Mic volume</strong> in Voice Party. Sing a line: the bar should reach the middle, without hitting the red end.</li>
+    <li>Wear headphones and tick <strong>I’m wearing headphones</strong>. This switches off echo cancellation, which can make singing over music sound muffled. Without headphones, keep it off, or the music echoes to everyone.</li>
+    <li>Still quiet at 400%? Raise your computer’s own microphone level (Windows: Settings → System → Sound → Input).</li></ul>`],
+  ['What can the party leader and admins do?', `<p>Whoever creates a room is its <strong>Leader</strong> and an admin. Admins can:</p><ul>
+    <li>make other people admins (only the leader can remove an admin),</li>
+    <li>mute someone in chat, delete messages or clear the chat,</li>
+    <li>remove someone from the room (they can’t rejoin it),</li>
+    <li>in <strong>Room settings</strong>, choose who can add songs, who controls the music and who can chat: everyone, or admins only.</li></ul>
+    <p>If every admin leaves, the person who’s been in the room longest becomes an admin automatically.</p>`],
+  ['I can’t hear a friend, or their tile says “No audio”', `<p>Calls go directly between your devices. Some networks (mobile data, offices, universities) block that. Try another network, or ask the room owner to set up a relay (see the project README). If a friend sounds silent on iPhone, tap anywhere on the page once.</p>`],
+  ['Some videos won’t play', `<p>Some uploaders don’t allow their videos on other sites. Paste a different upload of the same song; karaoke channels usually allow it.</p>`],
+  ['Which browsers and devices work?', `<p>Chrome, Edge and Firefox on computers, and Chrome on Android, work fully. iPhone and iPad (Safari) work for singing together; recordings there are voices only. Use headphones wherever you can.</p>`],
+  ['How many people can join?', `<p>Private rooms hold 5 to 10 people, public rooms 10. With cameras on, rooms of up to about 6 run smoothly; in bigger rooms, turning cameras off keeps the singing smooth.</p>`],
+  ['What does Duet store about me?', `<p>Your username, a scrambled (hashed) password, your Duet ID and the date you joined. Chat is kept only while the room is open. Recordings are converted and deleted from the server straight away; the file is only on your device. People in your room can see your username and ID, and calls reveal your internet address to the people you’re calling, as with most video-call apps.</p>`],
+];
+function viewFaq() {
+  setNav(!!me);
+  main.innerHTML = `
+    <section class="page">
+      <div class="wrap" style="max-width:860px">
+        <a class="back" href="#/">${BACK} ${me ? 'Home' : 'Sign in'}</a>
+        <div class="head enter"><h1 style="font-size:clamp(36px,4.4vw,56px)">How it <em>works</em></h1></div>
+        <div class="faq enter">
+          ${FAQ.map(([q, a], i) => `<details class="faq__item"${i === 0 ? ' open' : ''}><summary>${q}</summary><div class="faq__a">${a}</div></details>`).join('')}
+        </div>
+      </div>
+    </section>`;
+}
+
 // ---------- router ----------
 async function route() {
   if (cleanup) { try { cleanup(); } catch {} cleanup = null; }
@@ -400,6 +445,12 @@ async function route() {
   if (page === 'login' || page === 'signup') {
     if (store.token && me) { location.hash = '#/'; return; }
     viewAuth(page);
+    return;
+  }
+  if (page === 'faq') { // readable without signing in
+    if (store.token && !me) { try { me = (await api('/api/me')).user; } catch {} }
+    window.scrollTo(0, 0);
+    viewFaq();
     return;
   }
 
