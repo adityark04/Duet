@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=12';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=13';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -31,20 +31,33 @@ const I = {
   x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
 
-// YouTube title + thumbnail for a video ID (also tells us if the uploader blocks embedding).
+// YouTube title for a video ID, for the Up next list. Best effort: when the lookup refuses
+// or fails, the song still goes in and the player fills the title in once it loads.
 const infoCache = new Map();
 async function videoInfo(id) {
   if (infoCache.has(id)) return infoCache.get(id);
-  let info = { title: null, ok: true, embeddable: true };
+  let info = { title: null };
   try {
-    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}`);
-    if (res.status === 401 || res.status === 403) info = { title: null, ok: true, embeddable: false };
-    else if (!res.ok) info = { title: null, ok: false, embeddable: false };
-    else info = { title: String((await res.json()).title || '').slice(0, 120) || null, ok: true, embeddable: true };
-  } catch { /* offline or blocked: carry on without a title */ }
-  infoCache.set(id, info);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) info = { title: String((await res.json()).title || '').slice(0, 120) || null };
+  } catch { /* offline, slow or refused: carry on without a title */ }
+  if (info.title) infoCache.set(id, info);
   return info;
 }
+const UNLOCK_EVENTS = ['pointerdown', 'pointerup', 'touchend', 'keydown'];
+
+// Can this browser record the backing music? That needs tab-audio capture, which only
+// Chrome and Edge on a computer have. Everywhere else, recordings are voices only.
+const CAN_RECORD_MUSIC = (() => {
+  const ua = navigator.userAgent;
+  const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+  const chromium = /Chrome\/|Edg\//.test(ua) && !/OPR\/|SamsungBrowser/.test(ua);
+  return !!navigator.mediaDevices?.getDisplayMedia && chromium && !mobile;
+})();
+
 const thumb = (id) => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg`;
 
 const fmt = (s) => {
@@ -224,7 +237,9 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         <div style="display:grid;gap:8px"><h2 id="d-rec-h" style="font-size:28px">Record this song</h2>
         <p class="muted">The video shows ${solo ? 'you' : 'everyone'} from the <strong>${solo ? 'You on camera' : 'Voice &amp; video'}</strong> panel, with ${solo ? 'your voice' : 'all the voices'}. Turn your camera on to be seen; otherwise your initials show.</p></div>
         <div class="checks">
-          <label class="check"><input type="checkbox" id="d-rec-music" checked><span><strong>Include the backing music</strong><small>Your browser asks what to share. Pick <strong>this tab</strong> and turn on <strong>Also share tab audio</strong>. Wear headphones so the music isn’t picked up twice.</small></span></label>
+          ${CAN_RECORD_MUSIC
+            ? '<label class="check"><input type="checkbox" id="d-rec-music" checked><span><strong>Include the backing music</strong><small>Your browser asks what to share. Pick <strong>this tab</strong> and turn on <strong>Also share tab audio</strong>. Wear headphones so the music isn’t picked up twice.</small></span></label>'
+            : '<label class="check check--off"><input type="checkbox" id="d-rec-music" disabled><span><strong>Backing music not available here</strong><small>This browser can’t capture the song’s sound, so the recording will have the voices only. To include the music, record from Chrome or Edge on a computer.</small></span></label>'}
           <label class="check"><input type="checkbox" id="d-rec-top" checked><span><strong>Start the song from the beginning${solo ? '' : ' for everyone'}</strong></span></label>
         </div>
         <div class="dlg__actions">
@@ -391,7 +406,8 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   async function initMic() {
     try {
       S.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      document.addEventListener('pointerdown', resumeCtx, { capture: true });
+      // On touch screens only the end of a tap counts as permission to play sound.
+      for (const ev of UNLOCK_EVENTS) document.addEventListener(ev, resumeCtx, { capture: true });
     } catch {}
     try {
       // Echo cancellation on for the live call, so friends don't hear the track twice.
@@ -409,7 +425,12 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       els.mic.disabled = true;
     }
   }
-  function resumeCtx() { if (S.ctx && S.ctx.state === 'suspended') S.ctx.resume(); }
+  // iPhones/iPads (and strict autoplay settings elsewhere) keep audio silent until the person
+  // taps the page. On every tap: wake the audio engine and start any friend's voice still paused.
+  function resumeCtx() {
+    if (S.ctx && S.ctx.state === 'suspended') S.ctx.resume().catch(() => {});
+    els.audio?.querySelectorAll('audio').forEach((a) => { if (a.paused && a.srcObject) a.play().catch(() => {}); });
+  }
 
   function setMicMuted(muted) {
     S.micMuted = muted;
@@ -490,7 +511,9 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         els.audio.appendChild(peer.audio);
       }
       peer.audio.srcObject = stream;
-      peer.audio.play().catch(() => {});
+      peer.audio.play().catch(() => {
+        if (!S.tapHint) { S.tapHint = true; toast('Tap anywhere on the page to hear your friends.', 7000); }
+      });
       if (S.ctx) {
         try {
           peer.analyser = S.ctx.createAnalyser();
@@ -752,9 +775,9 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     const input = $('r-url');
     const id = parseYouTube(input.value);
     if (!id) { toast('That doesn’t look like a YouTube link.'); input.focus(); return; }
+    // Title lookup only. YouTube's lookup refuses some videos that still play fine in the
+    // player, so it must never block a song; the player itself reports videos it can't play.
     const info = await videoInfo(id);
-    if (!info.ok) { toast('That video can’t be found. Check the link.'); return; }
-    if (!info.embeddable) { toast('The uploader doesn’t allow this video on other sites. Try a different upload of the song.', 6000); return; }
     input.value = '';
     const item = { videoId: id, title: info.title };
     if (mode === 'now' || !S.media.videoId) {
@@ -794,10 +817,10 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     dRec.showModal();
   });
   dRec.addEventListener('close', () => {
-    if (dRec.returnValue === 'go') startRecording({ fromTop: $('d-rec-top').checked, withMusic: $('d-rec-music').checked });
+    if (dRec.returnValue === 'go') startRecording({ fromTop: $('d-rec-top').checked, withMusic: CAN_RECORD_MUSIC && $('d-rec-music').checked });
   });
   $('d-rec-music').addEventListener('change', (e) => { $('d-rec-go').textContent = e.target.checked ? 'Choose tab and record' : 'Start recording'; });
-  $('d-rec-go').textContent = 'Choose tab and record';
+  $('d-rec-go').textContent = CAN_RECORD_MUSIC ? 'Choose tab and record' : 'Start recording';
 
   // ---------- recording picture: the voice & video tiles, drawn onto a canvas ----------
   function participants() {
@@ -1397,7 +1420,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     cancelAnimationFrame(S.raf);
     S.timers.forEach(clearInterval);
     window.removeEventListener('beforeunload', onBeforeUnload);
-    document.removeEventListener('pointerdown', resumeCtx, { capture: true });
+    for (const ev of UNLOCK_EVENTS) document.removeEventListener(ev, resumeCtx, { capture: true });
     for (const sid of [...S.peers.keys()]) closePeer(sid);
     if (S.socket) { S.socket.emit('leave'); S.socket.disconnect(); }
     S.localStream?.getTracks().forEach((t) => t.stop());

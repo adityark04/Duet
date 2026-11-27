@@ -127,7 +127,7 @@ strong { font-weight: 600; }
 .wrap { width: 100%; max-width: calc(1280px + 2 * var(--gut)); margin: 0 auto; padding: 0 var(--gut); }
 
 /* ---------- nav ---------- */
-.nav { position: sticky; top: 0; height: var(--nav); background: rgba(13, 17, 27, .94); border-bottom: 1px solid var(--line); z-index: 10; }
+.nav { position: sticky; top: 0; height: var(--nav); background: var(--g-shell); border-bottom: 1px solid var(--line); z-index: 10; }
 .nav__inner { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); }
 .brand { display: inline-flex; align-items: center; gap: var(--s-3); text-decoration: none; color: var(--ink); font: 700 22px/1 var(--f-display); letter-spacing: -0.05em; }
 .brand svg { flex: none; }
@@ -493,6 +493,8 @@ body:has(.auth) { overflow-x: hidden; }
 .check input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--accent); }
 .check span { display: grid; gap: var(--s-1); font-size: 15px; }
 .check small { font-size: var(--t-small); color: var(--muted); line-height: 1.5; }
+.check--off { cursor: default; border-style: dashed; }
+.check--off input { opacity: .4; }
 
 /* ---------- export status in the save dialog ---------- */
 .export { font-size: var(--t-small); color: var(--muted); display: flex; align-items: center; gap: var(--s-2); min-height: 20px; }
