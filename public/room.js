@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=13';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=14';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -414,6 +414,9 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       S.localStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
       });
+      S.localStream.getAudioTracks()[0]?.addEventListener('ended', () => {
+        if (!S.disposed) toast('Your microphone disconnected (unplugged, or taken by another app). Reconnect it and reload the page.', 8000);
+      });
       if (S.ctx) {
         S.localAnalyser = S.ctx.createAnalyser();
         S.localAnalyser.fftSize = 512;
@@ -453,7 +456,12 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         });
         S.camTrack = s.getVideoTracks()[0];
         S.camStream = new MediaStream([S.camTrack]);
-        S.camTrack.addEventListener('ended', () => setCamera(false));
+        // On Windows another app or browser tab can take the webcam over, which ends ours.
+        S.camTrack.addEventListener('ended', () => {
+          if (S.disposed) return;
+          toast('Your camera stopped. Another app or tab may be using it. Close that, then turn your camera back on.', 7000);
+          setCamera(false);
+        });
       } catch {
         toast('Camera is blocked or busy. Allow it from the icon in the address bar.');
         return;
@@ -554,14 +562,21 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       const e = p.encodings[0];
       if (kind === 'audio') { e.priority = 'high'; e.networkPriority = 'high'; e.maxBitrate = 64_000; }
       else {
-        const others = S.peers.size;
-        const step = VIDEO_STEPS.find((s) => others <= s.upTo);
-        Object.assign(e, { maxBitrate: step.maxBitrate, scaleResolutionDownBy: step.scale, maxFramerate: step.fps, priority: 'low', networkPriority: 'low' });
+        // No frame-rate cap: in Microsoft Edge, capping it (on the sender or on the camera)
+        // stops video from being sent. The bitrate cap makes the encoder drop frames as needed.
+        const step = currentVideoStep();
+        Object.assign(e, { maxBitrate: step.maxBitrate, scaleResolutionDownBy: step.scale, priority: 'low', networkPriority: 'low' });
       }
       await sender.setParameters(p);
     } catch { /* older browsers: keep defaults */ }
   }
+  const currentVideoStep = () => VIDEO_STEPS.find((s) => S.peers.size <= s.upTo);
   function tuneAllSenders() {
+    // Big rooms: everyone sends video to everyone, which is a lot for phones and home internet.
+    if (S.peers.size >= 6 && S.camTrack && !S.bigRoomTip) {
+      S.bigRoomTip = true;
+      toast('Big room! If video gets choppy, turning cameras off keeps everyone’s singing smooth.', 7000);
+    }
     for (const p of S.peers.values()) {
       if (p.pc.connectionState !== 'connected') continue;
       for (const s of p.pc.getSenders()) if (s.track) tuneSender(s, s.track.kind);
