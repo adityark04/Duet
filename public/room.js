@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=14';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=15';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -179,32 +179,45 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
               </div>
             </div>
 
+            <section class="card upnext upnext--wide" aria-labelledby="r-upnext-h">
+              <div class="card__head"><h2 id="r-upnext-h">Up <em>next</em></h2><span class="label" id="r-qcount"></span></div>
+              <div class="upnext__grid">
+                <ol class="queue" id="r-queue" aria-label="Songs in the queue"></ol>
+                <form class="queue__add" id="r-load" novalidate>
+                  <label for="r-url" class="label">Add a song</label>
+                  <input class="input" id="r-url" placeholder="Paste a YouTube link" autocomplete="off" inputmode="url">
+                  <div class="queue__btns">
+                    <button class="btn btn--tonal" type="submit" value="queue">Add to Up next</button>
+                    <button class="btn btn--line" type="submit" value="now">Play now</button>
+                  </div>
+                  <p class="field__hint">Pick a video that shows the lyrics. Search “song name karaoke” on YouTube.</p>
+                </form>
+              </div>
+            </section>
+          </div>
+
+          <aside class="side">
             <section class="card faces" aria-labelledby="r-faces-h">
               <div class="section-head">
-                <div style="display:grid;gap:2px"><h2 id="r-faces-h">${solo ? 'You on <em>camera</em>' : 'On <em>stage</em>'}</h2><span class="label" id="r-count">${solo ? 'This is what your recording shows' : ''}</span></div>
+                <div style="display:grid;gap:2px"><h2 id="r-faces-h">Voice <em>Party</em></h2><span class="label" id="r-count">${solo ? 'This is what your recording shows' : ''}</span></div>
                 <div class="controls">
                   <button class="btn btn--tonal iconbtn" type="button" id="r-mic" aria-label="Mute microphone" aria-pressed="false">${I.mic}</button>
                   <button class="btn btn--tonal iconbtn" type="button" id="r-cam" aria-label="Turn camera on" aria-pressed="false">${I.camOff}</button>
                 </div>
               </div>
               <div class="tiles" id="r-tiles"></div>
+              <div class="micbox">
+                <div class="micbox__row">
+                  <label for="r-boost" class="label">Mic volume</label>
+                  <span class="label mono" id="r-boostval"></span>
+                </div>
+                <input type="range" id="r-boost" min="0.5" max="4" step="0.1" aria-describedby="r-boosthint">
+                <div class="meter" aria-hidden="true"><i id="r-meter"></i></div>
+                <p class="field__hint" id="r-boosthint">Sing a line: the bar should reach the middle, without hitting the end.</p>
+                <label class="switch"><input type="checkbox" id="r-hp"><span><strong>I’m wearing headphones</strong><small>Turns off echo cancellation for a clearer, fuller voice. Only with headphones, or the music echoes.</small></span></label>
+              </div>
               <p id="r-micwarn" hidden class="person__state person__state--warn" style="font-size:14px"></p>
             </section>
-          </div>
-
-          <aside class="side">
-            <div class="card upnext">
-              <div class="card__head"><h2>Up next</h2><span class="label" id="r-qcount"></span></div>
-              <ol class="queue" id="r-queue" aria-label="Songs in the queue"></ol>
-              <form class="queue__add" id="r-load" novalidate>
-                <label for="r-url" style="position:absolute;left:-9999px">YouTube link</label>
-                <input class="input" id="r-url" placeholder="Paste a YouTube link" autocomplete="off" inputmode="url">
-                <div class="queue__btns">
-                  <button class="btn btn--tonal" type="submit" value="queue">Add to Up next</button>
-                  <button class="btn btn--line" type="submit" value="now">Play now</button>
-                </div>
-              </form>
-            </div>
             ${solo ? '' : `<div class="card chat">
               <div class="card__head"><h2>Live chat</h2><span class="label" id="r-chatcount"></span></div>
               <ol class="chat__list" id="r-chat" aria-live="polite" aria-label="Chat messages">
@@ -220,7 +233,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
             <div class="card">
               <div class="card__head"><h2>How recording works</h2></div>
               <ol class="steps">
-                <li>Turn your camera on in <strong>${solo ? 'You on camera' : 'On stage'}</strong>. That panel is what gets filmed.</li>
+                <li>Turn your camera on in <strong>Voice Party</strong>. That panel is what gets filmed.</li>
                 <li>Press <strong>Record song</strong>. To keep the music, pick <strong>this tab</strong> and switch on <strong>Also share tab audio</strong>.</li>
                 <li>The song starts from the top${solo ? '' : ' for everyone'}. Sing.</li>
                 <li>When it ends, download your karaoke as an MP4.</li>
@@ -235,7 +248,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     <dialog id="d-rec" aria-labelledby="d-rec-h">
       <form method="dialog" class="dlg">
         <div style="display:grid;gap:8px"><h2 id="d-rec-h" style="font-size:28px">Record this song</h2>
-        <p class="muted">The video shows ${solo ? 'you' : 'everyone'} from the <strong>${solo ? 'You on camera' : 'Voice &amp; video'}</strong> panel, with ${solo ? 'your voice' : 'all the voices'}. Turn your camera on to be seen; otherwise your initials show.</p></div>
+        <p class="muted">The video shows ${solo ? 'you' : 'everyone'} from the <strong>Voice Party</strong> panel, with ${solo ? 'your voice' : 'all the voices'}. Turn your camera on to be seen; otherwise your initials show.</p></div>
         <div class="checks">
           ${CAN_RECORD_MUSIC
             ? '<label class="check"><input type="checkbox" id="d-rec-music" checked><span><strong>Include the backing music</strong><small>Your browser asks what to share. Pick <strong>this tab</strong> and turn on <strong>Also share tab audio</strong>. Wear headphones so the music isn’t picked up twice.</small></span></label>'
@@ -284,6 +297,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     audio: $('r-audio'), reacts: $('r-reacts'), recbadge: $('r-recbadge'), recnames: $('r-recnames'), micwarn: $('r-micwarn'),
     chat: $('r-chat'), chatform: $('r-chatform'), chatinput: $('r-chatinput'),
     queue: $('r-queue'), qcount: $('r-qcount'), skip: $('r-skip'), by: $('r-by'),
+    boost: $('r-boost'), boostval: $('r-boostval'), hp: $('r-hp'), meter: $('r-meter'),
   };
 
   // ---------- Up next ----------
@@ -397,8 +411,21 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       };
       set('me', S.micMuted ? null : S.localAnalyser);
       for (const [sid, p] of S.peers) set(sid, p.mic === false ? null : p.analyser);
+      // Mic meter: peak level of what friends receive, on a -48..0 dB scale, falling back smoothly.
+      if (S.voice && els.meter) {
+        const fb = meterBuf || (meterBuf = new Float32Array(S.voice.outAnalyser.fftSize));
+        S.voice.outAnalyser.getFloatTimeDomainData(fb);
+        let peak = 0;
+        for (let i = 0; i < fb.length; i++) { const a = Math.abs(fb[i]); if (a > peak) peak = a; }
+        const db = peak > 0 ? 20 * Math.log10(peak) : -100;
+        const target = S.micMuted ? 0 : Math.max(0, Math.min(1, (db + 48) / 48));
+        meterVal = target > meterVal ? target : Math.max(target, meterVal - 0.02);
+        els.meter.style.transform = `scaleX(${meterVal.toFixed(3)})`;
+      }
       S.raf = requestAnimationFrame(tick);
     };
+    let meterBuf = null;
+    let meterVal = 0;
     tick();
   }
 
@@ -410,24 +437,100 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       for (const ev of UNLOCK_EVENTS) document.addEventListener(ev, resumeCtx, { capture: true });
     } catch {}
     try {
-      // Echo cancellation on for the live call, so friends don't hear the track twice.
-      S.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
-      });
-      S.localStream.getAudioTracks()[0]?.addEventListener('ended', () => {
-        if (!S.disposed) toast('Your microphone disconnected (unplugged, or taken by another app). Reconnect it and reload the page.', 8000);
-      });
-      if (S.ctx) {
-        S.localAnalyser = S.ctx.createAnalyser();
-        S.localAnalyser.fftSize = 512;
-        S.ctx.createMediaStreamSource(S.localStream).connect(S.localAnalyser);
-      }
+      await openMic();
+      buildVoiceChain();
     } catch {
       els.micwarn.hidden = false;
       els.micwarn.textContent = 'Microphone is blocked. Allow it from the icon in the address bar, then reload so others can hear you.';
       els.mic.disabled = true;
+      els.boost.disabled = true;
+      els.hp.disabled = true;
     }
   }
+
+  // ---- your voice: mic → compressor → volume boost → limiter → friends ----
+  // Raw laptop/phone mics are quiet and uneven. The compressor evens out loud and soft
+  // phrases, the boost (Mic volume slider) lifts the level, the limiter stops distortion.
+  // Echo cancellation is on unless "I'm wearing headphones" is ticked: it protects friends
+  // from hearing the music twice, but squashes singing over music, so headphones sound better.
+  const readPref = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } };
+  const writePref = (k, v) => { try { localStorage.setItem(k, String(v)); } catch {} };
+  S.boost = Math.min(4, Math.max(0.5, Number(readPref('duet.micBoost', 2)) || 2));
+  S.headphones = readPref('duet.headphones', '0') === '1';
+
+  async function openMic() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: !S.headphones, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+    });
+    const old = S.localStream;
+    S.localStream = stream;
+    const track = stream.getAudioTracks()[0];
+    track.enabled = !S.micMuted;
+    track.addEventListener('ended', () => {
+      if (!S.disposed && S.localStream === stream) toast('Your microphone disconnected (unplugged, or taken by another app). Reconnect it and reload the page.', 8000);
+    });
+    if (S.voice) { // switching modes: feed the new mic into the existing chain
+      try { S.voice.src.disconnect(); } catch {}
+      S.voice.src = S.ctx.createMediaStreamSource(stream);
+      S.voice.src.connect(S.voice.comp);
+      S.voice.src.connect(S.localAnalyser);
+    }
+    old?.getTracks().forEach((t) => t.stop());
+    await useBestVoiceTrack();
+  }
+
+  function buildVoiceChain() {
+    if (!S.ctx || !S.localStream || S.voice) return;
+    const ctx = S.ctx;
+    const src = ctx.createMediaStreamSource(S.localStream);
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -30; comp.knee.value = 10; comp.ratio.value = 3.5; comp.attack.value = 0.004; comp.release.value = 0.2;
+    const gain = ctx.createGain(); gain.gain.value = S.boost;
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -2; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = 0.001; limiter.release.value = 0.08;
+    const dest = ctx.createMediaStreamDestination();
+    S.localAnalyser = ctx.createAnalyser(); S.localAnalyser.fftSize = 512;   // raw level (tile ring)
+    const outAnalyser = ctx.createAnalyser(); outAnalyser.fftSize = 1024;    // what friends hear (meter)
+    src.connect(comp).connect(gain).connect(limiter).connect(dest);
+    limiter.connect(outAnalyser);
+    src.connect(S.localAnalyser);
+    S.voice = { src, comp, gain, limiter, dest, outAnalyser, track: dest.stream.getAudioTracks()[0] };
+    S.voice.track.enabled = !S.micMuted;
+    // The chain only produces sound once the browser lets audio run (after a tap on some devices).
+    ctx.addEventListener('statechange', () => useBestVoiceTrack());
+    useBestVoiceTrack();
+  }
+
+  // Processed voice when audio is running, raw mic until then (never send silence).
+  const voiceTrack = () => (S.voice && S.ctx?.state === 'running' ? S.voice.track : S.localStream?.getAudioTracks()[0]);
+  async function useBestVoiceTrack() {
+    const t = voiceTrack();
+    if (!t) return;
+    for (const p of S.peers.values()) {
+      const s = p.pc.getSenders().find((x) => x.track?.kind === 'audio' || (x.track === null && p.audioSender === x));
+      if (s && s.track !== t) await s.replaceTrack(t).catch(() => {});
+    }
+  }
+
+  function setBoost(v) {
+    S.boost = Math.min(4, Math.max(0.5, Number(v) || 2));
+    writePref('duet.micBoost', S.boost);
+    if (S.voice) S.voice.gain.gain.setTargetAtTime(S.boost, S.ctx.currentTime, 0.05);
+    if (S.rec?.micGain && !S.micMuted) { S.rec.micLevel = S.boost; S.rec.micGain.gain.setTargetAtTime(S.boost, S.ctx.currentTime, 0.05); }
+    els.boostval.textContent = `${Math.round(S.boost * 100)}%`;
+  }
+  els.boost.value = String(S.boost);
+  els.boostval.textContent = `${Math.round(S.boost * 100)}%`;
+  els.boost.addEventListener('input', () => setBoost(els.boost.value));
+  els.hp.checked = S.headphones;
+  els.hp.addEventListener('change', async () => {
+    S.headphones = els.hp.checked;
+    writePref('duet.headphones', S.headphones ? '1' : '0');
+    try {
+      await openMic();
+      toast(S.headphones ? 'Headphones mode on: echo cancellation off, clearer voice.' : 'Echo cancellation back on.');
+    } catch { toast('Couldn’t switch the microphone. Check it’s connected.'); }
+  });
   // iPhones/iPads (and strict autoplay settings elsewhere) keep audio silent until the person
   // taps the page. On every tap: wake the audio engine and start any friend's voice still paused.
   function resumeCtx() {
@@ -438,6 +541,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   function setMicMuted(muted) {
     S.micMuted = muted;
     S.localStream?.getAudioTracks().forEach((t) => (t.enabled = !muted));
+    if (S.voice) S.voice.track.enabled = !muted;
     if (S.rec?.micGain) S.rec.micGain.gain.value = muted ? 0 : S.rec.micLevel;
     els.mic.innerHTML = muted ? I.micOff : I.mic;
     els.mic.setAttribute('aria-label', muted ? 'Unmute microphone' : 'Mute microphone');
@@ -495,7 +599,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       audio: null, stream: null, videoStream: null, analyser: null, pending: [], state: 'new', videoSender: null,
     };
     S.peers.set(sid, peer);
-    if (S.localStream) S.localStream.getAudioTracks().forEach((t) => pc.addTrack(t, S.localStream));
+    if (S.localStream) peer.audioSender = pc.addTrack(voiceTrack(), S.localStream);
     else pc.addTransceiver('audio', { direction: 'recvonly' });
     if (initiator) {
       const tr = pc.addTransceiver('video', { direction: 'sendrecv' });
@@ -560,7 +664,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       const p = sender.getParameters();
       if (!p.encodings || !p.encodings.length) return; // not negotiated yet; retried on connect
       const e = p.encodings[0];
-      if (kind === 'audio') { e.priority = 'high'; e.networkPriority = 'high'; e.maxBitrate = 64_000; }
+      if (kind === 'audio') { e.priority = 'high'; e.networkPriority = 'high'; e.maxBitrate = 96_000; } // singing needs more than speech
       else {
         // No frame-rate cap: in Microsoft Edge, capping it (on the sender or on the camera)
         // stops video from being sent. The bitrate cap makes the encoder drop frames as needed.
@@ -1057,22 +1161,24 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       }
     }
 
-    // Your voice: clean mic -> low-cut -> gentle compressor -> level -> mix.
+    // Your voice: clean mic -> low-cut -> compressor -> Mic volume -> limiter -> mix.
     const recMic = await openRecordingMic();
     const micSource = recMic || S.localStream;
     let micGain = null;
     let micAnalyser = null;
-    const micLevel = 1.6;
+    const micLevel = S.boost; // the Mic volume slider; can be changed while recording
     if (micSource) {
       const src = ctx.createMediaStreamSource(micSource);
       const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90;
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -24; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.2;
+      comp.threshold.value = -30; comp.knee.value = 10; comp.ratio.value = 3.5; comp.attack.value = 0.004; comp.release.value = 0.2;
       micGain = ctx.createGain(); micGain.gain.value = S.micMuted ? 0 : micLevel;
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -2; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = 0.001; limiter.release.value = 0.08;
       micAnalyser = ctx.createAnalyser(); micAnalyser.fftSize = 1024;
-      src.connect(hp).connect(comp).connect(micGain).connect(dest);
+      src.connect(hp).connect(comp).connect(micGain).connect(limiter).connect(dest);
       src.connect(micAnalyser);
-      nodes.push(src, hp, comp, micGain, micAnalyser);
+      nodes.push(src, hp, comp, micGain, limiter, micAnalyser);
     }
 
     const rec = {
