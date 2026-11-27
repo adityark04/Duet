@@ -9,6 +9,9 @@ data/
 *.mp4
 *.m4a
 
+# Private test notes (mention personal details)
+BETA-TEST-REPORT.md
+
 # Local tool settings and downloaded skills
 .claude/
 .agents/

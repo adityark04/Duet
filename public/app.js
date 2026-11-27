@@ -1,5 +1,5 @@
 // Keep ?v= in step with index.html and room.js (the same URL = the same module instance).
-import { mountRoom } from './room.js?v=11';
+import { mountRoom } from './room.js?v=12';
 
 // ---------- state ----------
 const store = {
@@ -156,7 +156,7 @@ function viewAuth(mode) {
         <div class="auth__copy enter">
           <a class="brand" href="#/login" aria-label="Duet">
             <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="#080A11" stroke="#E3A857" stroke-opacity=".5"/><circle cx="16" cy="16" r="11.5" fill="none" stroke="#F2E8D5" stroke-opacity=".14"/><circle cx="16" cy="16" r="6" fill="#E3A857"/><circle cx="16" cy="16" r="1.5" fill="#080A11"/></svg>
-            <span>Duet</span>
+            <span>duet</span>
           </a>
           <span class="label label--lamp">Open late, every night</span>
           <h1>Karaoke for friends who live <em>miles apart.</em></h1>
@@ -246,8 +246,21 @@ function viewHome() {
       <div class="wrap">
         <div class="head enter">
           <span class="label label--lamp">${greeting()}, ${esc(me.username)}</span>
-          <h1>What are we singing <em>tonight?</em></h1>
-          <p class="lead measure">The lights are low and the mic is warm. Take the spotlight alone, pull up a chair in a public room, or open a private room for the people you miss.</p>
+        </div>
+        <div class="hero enter">
+          <h1>Sing together, <em>wherever</em> you are.</h1>
+          <div class="hero__row">
+            <div class="hero__ctas">
+              <a class="btn btn--primary btn--lg" href="#/private">Start a private room</a>
+              <a class="btn btn--line btn--lg" href="#/public">Browse public rooms</a>
+            </div>
+            <p class="hero__note">The lights are low and the mic is warm. Line up songs, see each other on camera, and record the whole night.</p>
+            <a class="capsule" href="#/solo" aria-label="Sing solo">
+              <span class="capsule__play"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6 4.5v11a.8.8 0 0 0 1.2.7l8.6-5.5a.8.8 0 0 0 0-1.4L7.2 3.8A.8.8 0 0 0 6 4.5Z"/></svg></span>
+              <span class="capsule__t"><strong>Solo spotlight</strong><span>Warm up on your own</span></span>
+              <span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            </a>
+          </div>
         </div>
         <div class="modes enter">
           <a class="mode" href="#/solo">

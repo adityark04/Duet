@@ -1,4 +1,4 @@
-import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=11';
+import { esc, toast, copy, colorFor, initials, api, apiFetch, API_BASE } from './app.js?v=12';
 
 // Fallback if the server's ICE config can't be fetched. The server adds TURN when configured.
 const DEFAULT_ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
@@ -27,7 +27,25 @@ const I = {
   info: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.2V11M8 5v.2"/></svg>',
   leave: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3M8 14l-4-4 4-4M4 10h9"/></svg>',
   send: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10h11M10 4.5l5.5 5.5-5.5 5.5"/></svg>',
+  skip: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5v11l8-5.5-8-5.5Z" fill="currentColor"/><path d="M15.5 4.5v11"/></svg>',
+  x: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
 };
+
+// YouTube title + thumbnail for a video ID (also tells us if the uploader blocks embedding).
+const infoCache = new Map();
+async function videoInfo(id) {
+  if (infoCache.has(id)) return infoCache.get(id);
+  let info = { title: null, ok: true, embeddable: true };
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}`);
+    if (res.status === 401 || res.status === 403) info = { title: null, ok: true, embeddable: false };
+    else if (!res.ok) info = { title: null, ok: false, embeddable: false };
+    else info = { title: String((await res.json()).title || '').slice(0, 120) || null, ok: true, embeddable: true };
+  } catch { /* offline or blocked: carry on without a title */ }
+  infoCache.set(id, info);
+  return info;
+}
+const thumb = (id) => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg`;
 
 const fmt = (s) => {
   s = Math.max(0, Math.floor(s || 0));
@@ -133,24 +151,24 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
                   <div class="bar" id="r-bar" role="slider" tabindex="0" aria-label="Song position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="bar__track"><div class="bar__fill" id="r-fill"></div></div></div>
                   <span id="r-dur">0:00</span>
                 </div>
-                <div class="controls">
-                  <button class="btn btn--tonal iconbtn" type="button" id="r-play" aria-label="Play" disabled>${I.play}</button>
-                  <button class="btn btn--tonal iconbtn" type="button" id="r-restart" aria-label="Start from the beginning" disabled>${I.restart}</button>
-                  <div class="nowplaying"><span class="nowplaying__k">Now playing</span><span class="nowplaying__t" id="r-title">Nothing on the turntable yet</span></div>
-                  <button class="btn btn--primary btn--rec" type="button" id="r-rec" aria-pressed="false" disabled>${I.rec}<span>Record song</span></button>
+                <div class="transport">
+                  <button class="btn btn--primary btn--round" type="button" id="r-play" aria-label="Play" disabled>${I.play}</button>
+                  <div class="nowplaying"><span class="nowplaying__t" id="r-title">Nothing on the turntable yet</span><span class="nowplaying__k" id="r-by">Add a song from Up next</span></div>
+                  <div class="transport__right">
+                    <button class="btn btn--tonal iconbtn" type="button" id="r-restart" aria-label="Start from the beginning" disabled>${I.restart}</button>
+                    <button class="btn btn--tonal iconbtn" type="button" id="r-skip" aria-label="Skip to the next song" disabled>${I.skip}</button>
+                  </div>
                 </div>
-                <form class="loader" id="r-load" novalidate>
-                  <label for="r-url" style="position:absolute;left:-9999px">YouTube link</label>
-                  <input class="input" id="r-url" placeholder="Paste a YouTube link, e.g. https://youtu.be/…" autocomplete="off">
-                  <button class="btn btn--line" type="submit">Load song</button>
-                </form>
-                <p class="tip">${I.info}<span><strong>Pick a lyrics or karaoke video.</strong> ${solo ? 'Headphones keep the music out of your mic, so your voice comes through clean.' : 'Everyone hears the same track and each other live. Wear headphones so the music doesn’t echo back to the room.'}</span></p>
+                <div class="deck__foot">
+                  <p class="tip">${I.info}<span><strong>Pick a lyrics or karaoke video.</strong> ${solo ? 'Headphones keep the music out of your mic.' : 'Wear headphones so the music doesn’t echo back to the room.'}</span></p>
+                  <button class="btn btn--line btn--rec" type="button" id="r-rec" aria-pressed="false" disabled>${I.rec}<span>Record song</span></button>
+                </div>
               </div>
             </div>
 
-            <div class="card faces">
-              <div class="card__head">
-                <div style="display:grid;gap:2px"><h2>${solo ? 'You on camera' : 'Voice &amp; video'}</h2><span class="label" id="r-count">${solo ? 'This is what your recording shows' : ''}</span></div>
+            <section class="card faces" aria-labelledby="r-faces-h">
+              <div class="section-head">
+                <div style="display:grid;gap:2px"><h2 id="r-faces-h">${solo ? 'You on <em>camera</em>' : 'On <em>stage</em>'}</h2><span class="label" id="r-count">${solo ? 'This is what your recording shows' : ''}</span></div>
                 <div class="controls">
                   <button class="btn btn--tonal iconbtn" type="button" id="r-mic" aria-label="Mute microphone" aria-pressed="false">${I.mic}</button>
                   <button class="btn btn--tonal iconbtn" type="button" id="r-cam" aria-label="Turn camera on" aria-pressed="false">${I.camOff}</button>
@@ -158,10 +176,22 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
               </div>
               <div class="tiles" id="r-tiles"></div>
               <p id="r-micwarn" hidden class="person__state person__state--warn" style="font-size:14px"></p>
-            </div>
+            </section>
           </div>
 
           <aside class="side">
+            <div class="card upnext">
+              <div class="card__head"><h2>Up next</h2><span class="label" id="r-qcount"></span></div>
+              <ol class="queue" id="r-queue" aria-label="Songs in the queue"></ol>
+              <form class="queue__add" id="r-load" novalidate>
+                <label for="r-url" style="position:absolute;left:-9999px">YouTube link</label>
+                <input class="input" id="r-url" placeholder="Paste a YouTube link" autocomplete="off" inputmode="url">
+                <div class="queue__btns">
+                  <button class="btn btn--tonal" type="submit" value="queue">Add to Up next</button>
+                  <button class="btn btn--line" type="submit" value="now">Play now</button>
+                </div>
+              </form>
+            </div>
             ${solo ? '' : `<div class="card chat">
               <div class="card__head"><h2>Live chat</h2><span class="label" id="r-chatcount"></span></div>
               <ol class="chat__list" id="r-chat" aria-live="polite" aria-label="Chat messages">
@@ -177,7 +207,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
             <div class="card">
               <div class="card__head"><h2>How recording works</h2></div>
               <ol class="steps">
-                <li>Turn your camera on in the <strong>${solo ? 'You on camera' : 'Voice &amp; video'}</strong> panel. That panel is what gets filmed.</li>
+                <li>Turn your camera on in <strong>${solo ? 'You on camera' : 'On stage'}</strong>. That panel is what gets filmed.</li>
                 <li>Press <strong>Record song</strong>. To keep the music, pick <strong>this tab</strong> and switch on <strong>Also share tab audio</strong>.</li>
                 <li>The song starts from the top${solo ? '' : ' for everyone'}. Sing.</li>
                 <li>When it ends, download your karaoke as an MP4.</li>
@@ -238,7 +268,40 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     bar: $('r-bar'), fill: $('r-fill'), cur: $('r-cur'), dur: $('r-dur'), tiles: $('r-tiles'), count: $('r-count'),
     audio: $('r-audio'), reacts: $('r-reacts'), recbadge: $('r-recbadge'), recnames: $('r-recnames'), micwarn: $('r-micwarn'),
     chat: $('r-chat'), chatform: $('r-chatform'), chatinput: $('r-chatinput'),
+    queue: $('r-queue'), qcount: $('r-qcount'), skip: $('r-skip'), by: $('r-by'),
   };
+
+  // ---------- Up next ----------
+  S.queue = [];
+  function renderQueue() {
+    const rows = [];
+    if (S.media.videoId) {
+      rows.push(`<li class="qitem qitem--now"><img class="qitem__thumb" src="${thumb(S.media.videoId)}" alt="" loading="lazy">
+        <div style="min-width:0"><div class="qitem__title">${esc(S.media.title || 'Loading title…')}</div><div class="qitem__by">Now playing${S.media.by ? ` · added by ${esc(S.media.by)}` : ''}</div></div><span></span></li>`);
+    }
+    for (const q of S.queue) {
+      rows.push(`<li class="qitem"><img class="qitem__thumb" src="${thumb(q.videoId)}" alt="" loading="lazy">
+        <div style="min-width:0"><div class="qitem__title">${esc(q.title || 'YouTube video')}</div><div class="qitem__by">Added by ${esc(q.by)}</div></div>
+        <button class="qitem__x" type="button" data-remove="${esc(q.id)}" aria-label="Remove ${esc(q.title || 'this song')} from Up next">${I.x}</button></li>`);
+    }
+    if (!S.queue.length) rows.push(`<li class="queue__empty">${S.media.videoId ? 'Nothing lined up. Add the next song below.' : 'Paste a lyrics or karaoke video from YouTube to start.'}</li>`);
+    els.queue.innerHTML = rows.join('');
+    els.qcount.textContent = S.queue.length ? `${S.queue.length} waiting` : '';
+    els.skip.disabled = !S.queue.length;
+  }
+  els.queue.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-remove]');
+    if (!b) return;
+    if (solo) { S.queue = S.queue.filter((q) => q.id !== b.dataset.remove); renderQueue(); }
+    else S.socket?.emit('queue:remove', { id: b.dataset.remove });
+  });
+  function playNextLocal() {
+    const n = S.queue.shift();
+    if (!n) return false;
+    applyMedia({ videoId: n.videoId, title: n.title, playing: true, position: 0, at: Date.now(), by: n.by });
+    renderQueue();
+    return true;
+  }
 
   // ---------- video tiles (everyone in the room) ----------
   const tiles = new Map(); // key ('me' | socketId) -> { el, video, avatar, name, mic, state }
@@ -379,7 +442,8 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       S.camTrack = null;
       S.camStream = null;
     } else return;
-    for (const p of S.peers.values()) p.videoSender?.replaceTrack(S.camTrack).catch(() => {});
+    await Promise.all([...S.peers.values()].map((p) => p.videoSender?.replaceTrack(S.camTrack).catch(() => {})));
+    tuneAllSenders();
     if (els.cam) {
       els.cam.innerHTML = S.camTrack ? I.cam : I.camOff;
       els.cam.setAttribute('aria-label', S.camTrack ? 'Turn camera off' : 'Turn camera on');
@@ -438,6 +502,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     pc.onconnectionstatechange = () => {
       peer.state = pc.connectionState;
       renderTiles();
+      if (pc.connectionState === 'connected') tuneAllSenders();
       // The side that made the offer retries once with fresh candidates (TURN gets another chance).
       if (pc.connectionState === 'failed' && peer.initiator && !peer.restarted) {
         peer.restarted = true;
@@ -449,6 +514,35 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     };
     renderTiles();
     return peer;
+  }
+
+  // Everyone sends their camera to everyone else, so upload and CPU grow with the room.
+  // Step video quality down as the room fills up; voices always get priority.
+  const VIDEO_STEPS = [
+    { upTo: 2, maxBitrate: 600_000, scale: 1, fps: 24 },
+    { upTo: 4, maxBitrate: 350_000, scale: 1.5, fps: 20 },
+    { upTo: 6, maxBitrate: 200_000, scale: 2, fps: 15 },
+    { upTo: Infinity, maxBitrate: 110_000, scale: 3, fps: 12 },
+  ];
+  async function tuneSender(sender, kind) {
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) return; // not negotiated yet; retried on connect
+      const e = p.encodings[0];
+      if (kind === 'audio') { e.priority = 'high'; e.networkPriority = 'high'; e.maxBitrate = 64_000; }
+      else {
+        const others = S.peers.size;
+        const step = VIDEO_STEPS.find((s) => others <= s.upTo);
+        Object.assign(e, { maxBitrate: step.maxBitrate, scaleResolutionDownBy: step.scale, maxFramerate: step.fps, priority: 'low', networkPriority: 'low' });
+      }
+      await sender.setParameters(p);
+    } catch { /* older browsers: keep defaults */ }
+  }
+  function tuneAllSenders() {
+    for (const p of S.peers.values()) {
+      if (p.pc.connectionState !== 'connected') continue;
+      for (const s of p.pc.getSenders()) if (s.track) tuneSender(s, s.track.kind);
+    }
   }
 
   function closePeer(sid) {
@@ -541,6 +635,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     if (!t || t === S.media.title) return;
     S.media.title = t;
     els.title.textContent = t;
+    renderQueue();
     if (!solo) S.socket?.emit('media:title', { videoId: S.loadedId, title: t });
   }
 
@@ -564,6 +659,8 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     els.restart.disabled = false;
     els.rec.disabled = false;
     els.title.textContent = m.title || S.media.title || 'Loading…';
+    els.by.textContent = S.media.by ? `Added by ${S.media.by}` : 'Now playing';
+    renderQueue();
     await ensurePlayer(m.videoId);
     if (S.disposed || !S.player) return;
     const pos = expectedPos(S.media);
@@ -649,15 +746,30 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     }, 4000));
   }
 
-  $('r-load').addEventListener('submit', (e) => {
+  $('r-load').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const mode = e.submitter?.value === 'now' ? 'now' : 'queue';
     const input = $('r-url');
     const id = parseYouTube(input.value);
     if (!id) { toast('That doesn’t look like a YouTube link.'); input.focus(); return; }
+    const info = await videoInfo(id);
+    if (!info.ok) { toast('That video can’t be found. Check the link.'); return; }
+    if (!info.embeddable) { toast('The uploader doesn’t allow this video on other sites. Try a different upload of the song.', 6000); return; }
     input.value = '';
+    const item = { videoId: id, title: info.title };
+    if (mode === 'now' || !S.media.videoId) {
+      if (S.rec) stopRecording('switched');
+      if (solo) applyMedia({ ...item, playing: false, position: 0, at: Date.now(), by: me.username });
+      else S.socket.emit('media:load', item);
+      return;
+    }
+    if (solo) { S.queue.push({ ...item, id: Math.random().toString(36).slice(2, 10), by: me.username }); renderQueue(); }
+    else S.socket.emit('queue:add', item);
+    toast(`Added to Up next${info.title ? `: ${info.title}` : ''}`);
+  });
+  els.skip.addEventListener('click', () => {
     if (S.rec) stopRecording('switched');
-    if (solo) applyMedia({ videoId: id, title: null, playing: false, position: 0, at: Date.now() });
-    else S.socket.emit('media:load', { videoId: id });
+    if (solo) playNextLocal(); else S.socket.emit('queue:next');
   });
 
   // ---------- song end ----------
@@ -665,10 +777,12 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
   function onSongEnded() {
     if (Date.now() - endedAt < 3000) return;
     endedAt = Date.now();
-    if (!solo && S.media.playing) S.socket.emit('media:control', { action: 'ended', position: curTime() });
-    if (solo) S.media.playing = false;
+    const hasNext = S.queue.length > 0;
     if (S.rec) stopRecording('ended');
-    else toast('Song finished. Load another or press play to go again.');
+    // The server moves the whole room to the next song; solo does it locally.
+    if (!solo && S.media.playing) S.socket.emit('media:control', { action: 'ended', position: curTime(), videoId: S.media.videoId });
+    if (solo) { S.media.playing = false; if (!S.rec && hasNext) { playNextLocal(); return; } }
+    if (!S.rec && !hasNext) toast('Song finished. Add another to Up next or press play to go again.');
   }
 
   // ---------- recording ----------
@@ -1201,6 +1315,8 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
         S.socket.emit('state', { mic: !S.micMuted, cam: !!S.camTrack });
         setRecorders(res.recorders || []);
         (res.chat || []).forEach(addChat);
+        S.queue = res.queue || [];
+        renderQueue();
         renderTiles();
         for (const p of res.peers) { S.pendingInfo.set(p.socketId, p); callPeer(p).catch((e) => console.warn(e)); }
         if (res.media?.videoId) applyMedia(res.media);
@@ -1219,6 +1335,7 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
       S.pendingInfo.delete(socketId);
       closePeer(socketId);
       renderTiles();
+      tuneAllSenders(); // fewer people → video quality can step back up
     });
     S.socket.on('peer-state', ({ socketId, cam, mic }) => {
       const info = S.pendingInfo.get(socketId);
@@ -1228,10 +1345,12 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
     });
     S.socket.on('signal', onSignal);
     S.socket.on('media', (m) => {
-      if (m.event === 'load' && S.rec) stopRecording('switched');
+      if ((m.event === 'load' || m.event === 'next') && S.rec) stopRecording('switched');
       if (m.event === 'load' && m.by && m.by !== me.username) addChat({ system: true, text: `${m.by} put on a new song` });
+      if (m.event === 'next') { addChat({ system: true, text: `Up next: ${m.title || 'the next song'}` }); toast(`Up next: ${m.title || 'the next song'}`); }
       applyMedia(m);
     });
+    S.socket.on('queue', (list) => { S.queue = Array.isArray(list) ? list : []; renderQueue(); });
     S.socket.on('recorders', setRecorders);
     S.socket.on('react', ({ emoji, username }) => floatReaction(emoji, username));
     S.socket.on('chat', addChat);
@@ -1253,6 +1372,9 @@ export function mountRoom(main, { solo = false, code = null, me, token }) {
 
   // ---------- boot ----------
   renderTiles();
+  renderQueue();
+  // Test hook for automated load / browser tests. Only on when this browser has duet.debug=1 set.
+  try { if (localStorage.getItem('duet.debug') === '1') window.__duet = { S, curTime, expectedPos }; } catch {}
   (async () => {
     await initMic();
     if (S.disposed) return;

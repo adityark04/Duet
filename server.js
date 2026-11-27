@@ -144,6 +144,12 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!process.env.SESSION_SECRET && !fs.existsSync(SECRET_FILE)) fs.writeFileSync(SECRET_FILE, crypto.randomBytes(32).toString('hex'));
 const SECRET = process.env.SESSION_SECRET || fs.readFileSync(SECRET_FILE, 'utf8').trim();
 
+// Removes control characters, zero-width characters and text-direction overrides (which can make
+// text display misleadingly), collapses whitespace and trims to `max`.
+const cleanText = (v, max) => String(v ?? '')
+  .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+  .replace(/\s+/g, ' ').trim().slice(0, max);
+
 // Accounts live in memory and are persisted to either:
 //  - Upstash Redis (UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN): survives restarts on free
 //    hosts whose disk is wiped, like Render's free plan; or
@@ -241,20 +247,66 @@ function roomSummary(r) {
 function memberList(r) {
   return [...r.members.entries()].map(([socketId, m]) => ({ socketId, userId: m.userId, username: m.username, cam: m.cam, mic: m.mic }));
 }
-// Remove rooms that stay empty. New rooms get a grace period so the creator can join.
-function scheduleCleanup(r, ms = 90_000) {
-  clearTimeout(r.cleanupTimer);
-  r.cleanupTimer = setTimeout(() => {
-    if (r.members.size === 0) rooms.delete(r.code);
-  }, ms);
+
+// ---------- room lifecycle ----------
+// A room is deleted once it has been empty for long enough:
+//   never joined after creation  ROOM_UNUSED_MS        (default 90 s, time to share the code)
+//   public room                  ROOM_IDLE_PUBLIC_MS   (default 30 s)
+//   private room                 ROOM_IDLE_PRIVATE_MS  (default 10 min, so friends can drop and rejoin)
+// One sweep enforces this (no per-room timers to get out of step), and also drops members whose
+// connection no longer exists, so a crashed tab can never leave a ghost or keep a room alive.
+const ROOM_UNUSED_MS = envInt('ROOM_UNUSED_MS', 90_000);
+const ROOM_IDLE_PUBLIC_MS = envInt('ROOM_IDLE_PUBLIC_MS', 30_000);
+const ROOM_IDLE_PRIVATE_MS = envInt('ROOM_IDLE_PRIVATE_MS', 10 * 60_000);
+const ROOM_SWEEP_MS = envInt('ROOM_SWEEP_MS', 10_000);
+const QUEUE_MAX = 25;
+
+function idleLimit(r) {
+  if (!r.everJoined) return ROOM_UNUSED_MS;
+  return r.type === 'private' ? ROOM_IDLE_PRIVATE_MS : ROOM_IDLE_PUBLIC_MS;
 }
+// Pin the song at the point it had reached, so people who come back resume in the right place.
+function freezeMedia(r) {
+  if (!r.media.playing) return;
+  const pos = r.media.position + (Date.now() - r.media.at) / 1000;
+  r.media = { ...r.media, playing: false, position: Math.max(0, pos), at: Date.now() };
+}
+function deleteRoom(r) {
+  rooms.delete(r.code);
+  r.members.clear();
+  r.chat.length = 0;
+  r.queue.length = 0;
+}
+function sweepRooms() {
+  const now = Date.now();
+  for (const r of rooms.values()) {
+    for (const sid of [...r.members.keys()]) {
+      if (!io.sockets.sockets.has(sid)) {
+        const m = r.members.get(sid);
+        r.members.delete(sid);
+        if (m && r.recorders.delete(m.username)) io.to(r.code).emit('recorders', [...r.recorders]);
+        io.to(r.code).emit('peer-left', { socketId: sid });
+      }
+    }
+    if (r.members.size === 0) {
+      if (!r.emptySince) { r.emptySince = now; freezeMedia(r); }
+      if (now - r.emptySince >= idleLimit(r)) deleteRoom(r);
+    }
+  }
+}
+// A person's open rooms: ones with people in them, or emptied only moments ago.
+const roomsHeldBy = (userId) => [...rooms.values()].filter((r) => r.hostId === userId && (r.members.size > 0 || Date.now() - r.emptySince < ROOM_UNUSED_MS)).length;
 
 // ---------- http ----------
 const app = express();
 app.disable('x-powered-by');
 if (TRUST_PROXY > 0) app.set('trust proxy', TRUST_PROXY);
 
-app.get('/healthz', (req, res) => res.json({ ok: true, rooms: rooms.size, turn: TURN_MODE, store: STORE, cors: CORS_ORIGINS }));
+app.get('/healthz', (req, res) => {
+  let people = 0;
+  for (const r of rooms.values()) people += r.members.size;
+  res.json({ ok: true, rooms: rooms.size, people, connections: io.engine.clientsCount, turn: TURN_MODE, store: STORE, cors: CORS_ORIGINS });
+});
 
 if (FORCE_HTTPS) {
   app.use((req, res, next) => {
@@ -417,10 +469,10 @@ app.post('/api/rooms', auth, rateLimit(LIMIT.roomCreate, byUser, 'You’ve opene
     if (!Number.isInteger(cap) || cap < 5 || cap > 10) return res.status(400).json({ error: 'Private rooms hold 5 to 10 people.' });
   }
   if (rooms.size >= CAPS.rooms) return res.status(503).json({ error: 'All the rooms are full right now. Try again in a little while.' });
-  const mine = [...rooms.values()].filter((r) => r.hostId === req.user.id).length;
-  if (mine >= CAPS.roomsPerUser) return res.status(429).json({ error: `You already have ${mine} rooms open. Use one of those, or wait for an empty one to close.` });
+  const mine = roomsHeldBy(req.user.id);
+  if (mine >= CAPS.roomsPerUser) return res.status(429).json({ error: `You already have ${mine} rooms open. Use one of those, or wait a minute for an empty one to close.` });
   // Strip control characters and the like; the client also escapes everything it shows.
-  const cleanName = String(name || '').replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮]/g, '').trim().slice(0, 40) || `${req.user.username}’s room`;
+  const cleanName = cleanText(name, 40) || `${req.user.username}’s room`;
   const code = newRoomCode();
   const room = {
     code,
@@ -434,9 +486,11 @@ app.post('/api/rooms', auth, rateLimit(LIMIT.roomCreate, byUser, 'You’ve opene
     media: { videoId: null, title: null, playing: false, position: 0, at: Date.now() },
     recorders: new Set(),
     chat: [],
+    queue: [],
+    everJoined: false,
+    emptySince: Date.now(),
   };
   rooms.set(code, room);
-  scheduleCleanup(room);
   res.json({ room: roomSummary(room) });
 });
 
@@ -533,8 +587,37 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 const server = http.createServer(app);
 const io = new Server(server, {
   maxHttpBufferSize: 1e5,
+  // Notice a vanished connection (closed laptop, lost Wi-Fi) within ~20 s instead of ~45 s.
+  pingInterval: envInt('PING_INTERVAL_MS', 10_000),
+  pingTimeout: envInt('PING_TIMEOUT_MS', 10_000),
   ...(CORS_ORIGINS.length ? { cors: { origin: CORS_ORIGINS, methods: ['GET', 'POST'] } } : {}),
 });
+setInterval(sweepRooms, ROOM_SWEEP_MS).unref();
+
+// Recordings are deleted right after conversion; this catches any left by a crash mid-conversion.
+function sweepTempFiles() {
+  const dir = os.tmpdir();
+  fs.readdir(dir, (err, names) => {
+    if (err) return;
+    for (const n of names) {
+      if (!/^duet-[0-9a-f-]{36}\.(webm|mp4|m4a)$/.test(n)) continue;
+      const p = path.join(dir, n);
+      fs.stat(p, (e, st) => { if (!e && Date.now() - st.mtimeMs > 60 * 60_000) fs.rm(p, { force: true }, () => {}); });
+    }
+  });
+}
+sweepTempFiles();
+setInterval(sweepTempFiles, 30 * 60_000).unref();
+
+// The "Up next" list: advance to the next song (when one ends, or someone skips).
+function playNext(r, by) {
+  const next = r.queue.shift();
+  if (!next) return false;
+  r.media = { videoId: next.videoId, title: next.title, playing: true, position: 0, at: Date.now(), by };
+  io.to(r.code).emit('media', { ...r.media, event: 'next' });
+  io.to(r.code).emit('queue', r.queue);
+  return true;
+}
 
 // Open connections per IP (a household or office shares one IP, so the cap is generous).
 const connsByIp = new Map();
@@ -581,6 +664,9 @@ const EVENT_BUDGET = {
   join: [0.2, 3],
   time: [2, 10],
   leave: [1, 3],
+  'queue:add': [0.5, 5],
+  'queue:remove': [1, 5],
+  'queue:next': [0.3, 3],
 };
 
 io.on('connection', (socket) => {
@@ -592,11 +678,15 @@ io.on('connection', (socket) => {
   const overall = bucket(40, 200);
   let dropped = 0;
   let droppedSince = Date.now();
-  socket.use(([event], next) => {
+  socket.use((packet, next) => {
+    const [event] = packet;
     const spec = EVENT_BUDGET[event];
     if (!spec) return; // unknown event: ignore silently
     buckets[event] ||= bucket(...spec);
     if (overall() && buckets[event]()) return next();
+    // Requests that expect an answer (like join) always get one, so nothing waits forever.
+    const reply = packet[packet.length - 1];
+    if (typeof reply === 'function') reply({ error: 'Too many requests at once. Wait a moment and try again.' });
     if (Date.now() - droppedSince > 10_000) { dropped = 0; droppedSince = Date.now(); }
     // Chat gets its own wording, so a dropped message isn't a mystery.
     if (event === 'chat') socket.emit('chat-error', { error: 'Slow down a little. Some messages weren’t sent.' });
@@ -624,7 +714,8 @@ io.on('connection', (socket) => {
     const peers = memberList(r);
     const state = { cam: false, mic: true };
     r.members.set(socket.id, { userId: user.id, username: user.username, ...state });
-    clearTimeout(r.cleanupTimer);
+    r.everJoined = true;
+    r.emptySince = null;
     room = r;
     socket.join(r.code);
     socket.to(r.code).emit('peer-joined', { socketId: socket.id, userId: user.id, username: user.username, ...state });
@@ -634,6 +725,7 @@ io.on('connection', (socket) => {
       media: r.media,
       recorders: [...r.recorders],
       chat: r.chat,
+      queue: r.queue,
       serverNow: Date.now(),
     });
   });
@@ -652,7 +744,7 @@ io.on('connection', (socket) => {
   const chatTimes = [];
   socket.on('chat', ({ text } = {}) => {
     if (!room || typeof text !== 'string') return;
-    const clean = text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    const clean = cleanText(text, 500);
     if (!clean) return;
     const now = Date.now();
     while (chatTimes.length && now - chatTimes[0] > 5000) chatTimes.shift();
@@ -673,24 +765,55 @@ io.on('connection', (socket) => {
 
   socket.on('media:load', ({ videoId, title } = {}) => {
     if (!room || typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
-    room.media = { videoId, title: String(title || '').slice(0, 120) || null, playing: false, position: 0, at: Date.now(), by: user.username };
+    room.media = { videoId, title: cleanText(title, 120) || null, playing: false, position: 0, at: Date.now(), by: user.username };
     io.to(room.code).emit('media', { ...room.media, event: 'load' });
   });
 
   socket.on('media:title', ({ videoId, title } = {}) => {
     if (!room || room.media.videoId !== videoId) return;
-    room.media.title = String(title || '').replace(/[\u0000-\u001f\u007f-\u009f‪-‮]/g, '').slice(0, 120) || null;
+    room.media.title = cleanText(title, 120) || null;
   });
 
-  socket.on('media:control', ({ action, position } = {}) => {
+  socket.on('media:control', ({ action, position, videoId } = {}) => {
     if (!room || !room.media.videoId) return;
     const pos = Math.min(24 * 3600, Math.max(0, Number(position) || 0));
-    if (action === 'play') room.media = { ...room.media, playing: true, position: pos, at: Date.now() };
+    if (action === 'ended') {
+      // Everyone's player reports the end; only the first report for the current song counts.
+      if (videoId && videoId !== room.media.videoId) return;
+      if (!room.media.playing) return;
+      if (playNext(room, user.username)) return;
+      room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
+    } else if (action === 'play') room.media = { ...room.media, playing: true, position: pos, at: Date.now() };
     else if (action === 'pause') room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
     else if (action === 'seek') room.media = { ...room.media, position: pos, at: Date.now() };
-    else if (action === 'ended') room.media = { ...room.media, playing: false, position: pos, at: Date.now() };
     else return;
     io.to(room.code).emit('media', { ...room.media, event: action, by: user.username });
+  });
+
+  // ---- Up next ----
+  socket.on('queue:add', ({ videoId, title } = {}) => {
+    if (!room || typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
+    if (room.queue.length >= QUEUE_MAX) return socket.emit('chat-error', { error: `The list holds ${QUEUE_MAX} songs. Play or remove some first.` });
+    const item = { id: crypto.randomUUID().slice(0, 8), videoId, title: cleanText(title, 120) || null, by: user.username };
+    // Nothing loaded yet: put it straight on (paused, so everyone can get ready).
+    if (!room.media.videoId) {
+      room.media = { videoId, title: item.title, playing: false, position: 0, at: Date.now(), by: user.username };
+      io.to(room.code).emit('media', { ...room.media, event: 'load' });
+      return;
+    }
+    room.queue.push(item);
+    io.to(room.code).emit('queue', room.queue);
+  });
+  socket.on('queue:remove', ({ id } = {}) => {
+    if (!room) return;
+    const i = room.queue.findIndex((q) => q.id === id);
+    if (i < 0) return;
+    room.queue.splice(i, 1);
+    io.to(room.code).emit('queue', room.queue);
+  });
+  socket.on('queue:next', () => {
+    if (!room) return;
+    if (!playNext(room, user.username)) socket.emit('chat-error', { error: 'Nothing in Up next yet.' });
   });
 
   socket.on('rec', ({ on } = {}) => {
@@ -711,8 +834,8 @@ io.on('connection', (socket) => {
     socket.to(room.code).emit('peer-left', { socketId: socket.id });
     socket.leave(room.code);
     if (room.members.size === 0) {
-      room.media.playing = false;
-      scheduleCleanup(room, room.type === 'private' ? 10 * 60_000 : 30_000);
+      room.emptySince = Date.now();
+      freezeMedia(room);
     }
     room = null;
   };

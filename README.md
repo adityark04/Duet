@@ -20,6 +20,7 @@ Open http://localhost:3000. Data (accounts, signing key) is stored in `data/`.
 - **Public rooms.** Listed for everyone signed in. Up to 10 people each.
 - **Private rooms.** The creator picks the size, 5 to 10 people. Each room gets a 5-character code (A–Z, 0–9), for example `BLYF4`. Only people with the code (or the invite link) can join.
 - **Singing together.** Anyone pastes a YouTube link. The video plays in sync for everyone. Voices travel peer-to-peer over WebRTC so everyone hears each other live over the music. Anyone can play, pause, seek or restart.
+- **Up next.** Paste YouTube links to line songs up (thumbnails and titles shown). When a song ends the next one starts for everyone; anyone can skip or remove songs. Videos whose uploader blocks embedding are caught before they're added.
 - **Voice, video and chat.** Everyone in a room hears each other live. Turn on your camera to appear in the *Voice & video* tiles; a ring glows around whoever is singing. A live text chat sits beside the stage, with the last 50 messages shown to people who join late.
 - **Recording.** Anyone in the room (or solo) presses **Record song**. The video is the *Voice & video* panel (everyone's cameras, or initials when a camera is off, with a ring on whoever is singing), not the YouTube video. The sound is everyone's voices, with your own mic taken from a clean, unprocessed feed. **Include the backing music** (on by default) adds the song: the browser asks to share **this tab** with **Also share tab audio** on. Untick it for voices only, with no share prompt. When the song ends the song pauses and a dialog appears; the server converts the take to a normal, seekable **MP4** (ffmpeg; Chrome records H.264/AAC, so this is just a fast repackage) and you download it. The original file is offered as a backup.
 
@@ -87,6 +88,19 @@ Built-in limits keep one person (or a script) from guessing passwords or private
 | `MAX_ACCOUNTS` / `MAX_ROOMS` / `MAX_ROOMS_PER_USER` | 10000 / 300 / 3 | Totals |
 | `MAX_PASSWORD_CHECKS` / `MAX_PASSWORD_QUEUE` | 2 / 30 | Password checks at once / waiting (then "busy") |
 | `EXPORT_MAX_MB` | 250 | Largest recording upload |
+
+### Room cleanup
+
+Rooms live in the server's memory. A sweep every `ROOM_SWEEP_MS` (10 s) removes people whose connection has gone and deletes rooms that have been empty long enough:
+
+| Variable | Default | Room deleted after being empty for |
+| --- | --- | --- |
+| `ROOM_UNUSED_MS` | 90 s | a room nobody ever joined (time to share the code) |
+| `ROOM_IDLE_PUBLIC_MS` | 30 s | a public room |
+| `ROOM_IDLE_PRIVATE_MS` | 10 min | a private room (friends can drop out and rejoin) |
+| `PING_INTERVAL_MS` / `PING_TIMEOUT_MS` | 10 s / 10 s | a vanished connection is noticed within about 20 s |
+
+When the last person leaves mid-song, the song is paused at the point it had reached. Empty rooms stop counting towards `MAX_ROOMS_PER_USER` after `ROOM_UNUSED_MS`. Leftover temp files from an interrupted recording conversion are removed after an hour.
 
 Live events (chat, reactions, playback controls, call set-up) each have a per-person budget; floods are dropped and a connection that keeps flooding is closed.
 
